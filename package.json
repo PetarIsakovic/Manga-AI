@@ -1,0 +1,18 @@
+{
+  "name": "manga-veo-reader",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "build": "cd frontend && npm run build",
+    "clear-cache": "node -e \"console.log('Open browser console and run: indexedDB.deleteDatabase(\\'manga-veo-cache\\')')\"",
+    "test:backend": "cd backend && npm test",
+    "veo:doctor": "npm --prefix backend run veo:doctor --"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
