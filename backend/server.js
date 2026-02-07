@@ -30,7 +30,7 @@ const VEO_INCLUDE_IMAGE = process.env.VEO_INCLUDE_IMAGE !== 'false';
 const VEO_PROVIDER = (process.env.VEO_PROVIDER || 'gemini').toLowerCase();
 const VEO_REQUIRE_IMAGE = process.env.VEO_REQUIRE_IMAGE !== 'false';
 const VEO_ALLOW_IMAGE_FALLBACK = process.env.VEO_ALLOW_IMAGE_FALLBACK === 'true';
-const VEO_GEMINI_IMAGE_MODE = (process.env.VEO_GEMINI_IMAGE_MODE || 'reference').toLowerCase();
+const VEO_GEMINI_IMAGE_MODE = (process.env.VEO_GEMINI_IMAGE_MODE || 'first_frame').toLowerCase();
 const VEO_USE_GEMINI3_PROMPT = process.env.VEO_USE_GEMINI3_PROMPT === 'true';
 const VEO_DEBUG_PROMPT = process.env.VEO_DEBUG_PROMPT === 'true';
 const GEMINI3_ANALYSIS_MODEL = process.env.GEMINI3_ANALYSIS_MODEL || 'gemini-3-flash-preview';
@@ -506,6 +506,7 @@ app.post('/api/veo', async (req, res) => {
         const objectPath = `${basePrefix}inputs/${requestId}.${ext}`;
         const uploadUrl = `https://storage.googleapis.com/upload/storage/v1/b/${gcs.bucket}/o?uploadType=media&name=${encodeURIComponent(objectPath)}`;
         const token = await getAccessToken();
+        console.log(`🖼️ Uploading reference image to GCS: gs://${gcs.bucket}/${objectPath}`);
         const uploadResp = await fetch(uploadUrl, {
           method: 'POST',
           headers: {
@@ -518,6 +519,7 @@ app.post('/api/veo', async (req, res) => {
         if (!uploadResp.ok) {
           throw new Error(`GCS upload error ${uploadResp.status}: ${uploadText.substring(0, 200)}`);
         }
+        console.log(`✅ Image uploaded successfully`);
         instance.image = {
           gcsUri: `gs://${gcs.bucket}/${objectPath}`,
           mimeType: effectiveMimeType
@@ -604,6 +606,13 @@ app.post('/api/veo', async (req, res) => {
     let imageMode = VEO_GEMINI_IMAGE_MODE;
     let requestBody = buildRequestBody(imageMode);
     let triedAlternateImageMode = false;
+
+    console.log(`🖼️ Image mode: ${imageMode}, includeImage: ${VEO_INCLUDE_IMAGE}, hasImage: ${!!imageData}`);
+    if (imageMode === 'first_frame' && imageData) {
+      console.log(`🖼️ Using image as starting frame for image-to-video generation`);
+    } else if (imageMode === 'reference' && imageData) {
+      console.log(`🖼️ Using image as style reference (may not maintain visual fidelity - try VEO_GEMINI_IMAGE_MODE=first_frame)`);
+    }
 
     let generateResponse;
     try {

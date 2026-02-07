@@ -141,7 +141,9 @@ body {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* PDF Uploader */
@@ -286,11 +288,11 @@ body {
   .app-header {
     padding: 0.75rem 1rem;
   }
-  
+
   .app-header h1 {
     font-size: 1rem;
   }
-  
+
   .pages-container {
     width: 98vw;
     max-width: 98vw;

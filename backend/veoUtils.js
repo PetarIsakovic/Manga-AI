@@ -6,27 +6,47 @@ export function buildVeoRequestBody({
   resolution,
   personGeneration,
   numberOfVideos,
-  includeImage = true
+  includeImage = true,
+  imageMode = 'first_frame'
 }) {
   const instance = { prompt };
+  const parameters = {
+    aspectRatio: aspectRatio === '9:16' ? '9:16' : '16:9',
+    resolution: resolution || '720p',
+    ...(Number.isInteger(numberOfVideos) && numberOfVideos > 0
+      ? { numberOfVideos }
+      : {}),
+    ...(personGeneration ? { personGeneration } : {})
+  };
 
   if (includeImage && imageData && mimeType) {
-    instance.image = {
-      imageBytes: imageData,
-      mimeType
-    };
+    if (imageMode === 'reference') {
+      // Reference mode: image goes in parameters.referenceImages
+      // This tells Veo to use the image as a style/content reference
+      // while generating the video, keeping it faithful to the original
+      parameters.referenceImages = [
+        {
+          referenceType: 'REFERENCE_TYPE_STYLE',
+          referenceId: 1,
+          image: {
+            imageBytes: imageData,
+            mimeType
+          }
+        }
+      ];
+    } else {
+      // first_frame mode (default): image goes in instance.image
+      // This uses the image as the starting frame for image-to-video generation
+      instance.image = {
+        imageBytes: imageData,
+        mimeType
+      };
+    }
   }
 
   return {
     instances: [instance],
-    parameters: {
-      aspectRatio: aspectRatio === '9:16' ? '9:16' : '16:9',
-      resolution: resolution || '720p',
-      ...(Number.isInteger(numberOfVideos) && numberOfVideos > 0
-        ? { numberOfVideos }
-        : {}),
-      ...(personGeneration ? { personGeneration } : {})
-    }
+    parameters
   };
 }
 
