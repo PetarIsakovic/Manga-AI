@@ -50,6 +50,68 @@ body {
   background: #333;
 }
 
+.zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 1rem;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  margin-left: auto;
+  margin-right: 1rem;
+}
+
+.zoom-control label {
+  font-size: 0.875rem;
+  color: #b0b0b0;
+  white-space: nowrap;
+  min-width: 70px;
+}
+
+.zoom-control input[type="range"] {
+  width: 120px;
+  height: 4px;
+  background: #333;
+  border-radius: 2px;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.zoom-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #4a9eff;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.zoom-control input[type="range"]::-webkit-slider-thumb:hover {
+  background: #6bb1ff;
+}
+
+.zoom-control input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #4a9eff;
+  cursor: pointer;
+  border: none;
+  transition: background 0.2s;
+}
+
+.zoom-control input[type="range"]::-moz-range-thumb:hover {
+  background: #6bb1ff;
+}
+
+.zoom-control input[type="range"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .error-banner {
   background: #ff4444;
   color: white;

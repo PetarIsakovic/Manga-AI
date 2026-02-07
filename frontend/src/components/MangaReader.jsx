@@ -5,7 +5,7 @@ import { generateVideo } from '../utils/api.js';
 
 const PREFETCH_ENABLED = false;
 
-export default function MangaReader({ pages, pdfHash }) {
+export default function MangaReader({ pages, pdfHash, displayZoom = 100 }) {
   const [pageStates, setPageStates] = useState(() =>
     pages.map(() => ({ status: 'idle', videoUrl: null, error: null }))
   );
@@ -97,7 +97,10 @@ export default function MangaReader({ pages, pdfHash }) {
 
   return (
     <div className="manga-reader">
-      <div className="pages-container">
+      <div 
+        className="pages-container" 
+        style={{ width: `${displayZoom}%`, maxWidth: `${displayZoom}%` }}
+      >
         {pages.map((page, index) => (
           <PageCard
             key={index}

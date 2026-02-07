@@ -10,6 +10,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [modelAccess, setModelAccess] = useState(null);
+  const [currentFile, setCurrentFile] = useState(null);
+  const [displayZoom, setDisplayZoom] = useState(100); // Display zoom percentage (50-150)
 
   useEffect(() => {
     // Check model access on mount
@@ -28,12 +30,14 @@ export default function App() {
   const handlePdfLoad = useCallback(async (file) => {
     setLoading(true);
     setError(null);
+    setCurrentFile(file);
     try {
       const arrayBuffer = await file.arrayBuffer();
       const hash = await computePdfHash(arrayBuffer);
       setPdfHash(hash);
       
-      const renderedPages = await renderPdfToImages(arrayBuffer);
+      // Always render at high resolution (scale 2) for quality
+      const renderedPages = await renderPdfToImages(arrayBuffer, { scale: 2 });
       setPages(renderedPages);
     } catch (err) {
       setError(err.message);
@@ -46,6 +50,7 @@ export default function App() {
     setPages([]);
     setPdfHash(null);
     setError(null);
+    setCurrentFile(null);
   }, []);
 
   return (
@@ -65,9 +70,25 @@ export default function App() {
           </div>
         )}
         {pages.length > 0 && (
-          <button onClick={handleReset} className="reset-btn">
-            Load New PDF
-          </button>
+          <>
+            <div className="zoom-control">
+              <label htmlFor="zoom-slider">
+                Size: {displayZoom}%
+              </label>
+              <input
+                id="zoom-slider"
+                type="range"
+                min="30"
+                max="150"
+                step="5"
+                value={displayZoom}
+                onChange={(e) => setDisplayZoom(Number(e.target.value))}
+              />
+            </div>
+            <button onClick={handleReset} className="reset-btn">
+              Load New PDF
+            </button>
+          </>
         )}
       </header>
       
@@ -83,7 +104,7 @@ export default function App() {
       {pages.length === 0 && !loading ? (
         <PdfUploader onPdfLoad={handlePdfLoad} />
       ) : (
-        <MangaReader pages={pages} pdfHash={pdfHash} />
+        <MangaReader pages={pages} pdfHash={pdfHash} displayZoom={displayZoom} />
       )}
     </div>
   );
