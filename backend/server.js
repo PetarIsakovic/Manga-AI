@@ -49,12 +49,13 @@ const VERTEX_OUTPUT_GCS_URI = process.env.VERTEX_OUTPUT_GCS_URI;
 const PORT = process.env.PORT || 3001;
 
 const BASE_CONSTRAINTS_TEXT = [
-  'Use the provided comic page as a fixed, immutable frame.',
-  'All panels, borders, gutters, line art, shading, and text must remain unchanged.',
-  'This is a living comic page, not a re-animated scene.',
-  'Do not redraw, re-ink, recolor, or reinterpret the artwork.',
-  'Animate the existing pixels only.',
-  'No camera movement. No scene cuts. No zoom/pan/tilt/scroll/rotate.'
+  'Use the provided comic page as a completely fixed, stationary frame.',
+  'The frame itself must NOT move, slide, pan, zoom, tilt, or shift in any direction.',
+  'All panels, borders, gutters, line art, and text must remain in their exact positions.',
+  'This is character animation within a fixed comic page, not camera movement.',
+  'Animate individual characters and elements WITHIN the frame only.',
+  'The background and panel borders are locked in place - they must NOT move.',
+  'No camera movement. No scene cuts. No parallax. No frame motion.'
 ].join(' ');
 const STYLE_PRESERVATION_TEXT = [
   'Preserve the original line thickness, ink texture, and flat coloring.',
@@ -69,16 +70,18 @@ const PANEL_LOCK_TEXT = [
   'No visual blending between panels.'
 ].join(' ');
 const FORBIDDEN_CHANGES_TEXT = [
-  'Do NOT change pose, facial expression, perspective, layout, or text.',
-  'Do NOT add new visual elements.',
-  'Do NOT redraw, repaint, or enhance the artwork.',
+  'Do NOT change overall pose, perspective, layout, or text.',
+  'Do NOT add new visual elements or redraw anything.',
+  'Do NOT move the frame, slide the panel, or create camera motion.',
+  'Characters can move naturally (breathing, blinking, hair sway, cloth movement, gesture completion).',
   'Lighting must remain exactly as drawn.',
-  'Forbidden: style enhancement, anime video look, cinematic lighting, depth of field, motion blur, redraw or cleanup, line smoothing.'
+  'Forbidden: frame sliding, camera pan, style enhancement, anime video redraw, cinematic effects, depth of field changes.'
 ].join(' ');
 const VIDEO_SETTINGS_TEXT = [
   'Duration: 4 seconds.',
-  'Stable framing.',
-  'Motion intensity: subtle but visible.'
+  'Completely stable, locked framing - the frame must NOT move.',
+  'Motion intensity: natural character animation, clearly visible but not exaggerated.',
+  'Focus animation on character actions: breathing, blinking, hair movement, cloth rustling, limb gestures.'
 ].join(' ');
 
 const ANIMATION_PROMPT = `BASE CONSTRAINTS:\n${BASE_CONSTRAINTS_TEXT}\n\nSTYLE & ART PRESERVATION:\n${STYLE_PRESERVATION_TEXT}\n\nPANEL LOCK:\n${PANEL_LOCK_TEXT}\n\nFORBIDDEN CHANGES:\n${FORBIDDEN_CHANGES_TEXT}\n\nVIDEO SETTINGS:\n${VIDEO_SETTINGS_TEXT}`;
@@ -147,23 +150,69 @@ function buildDownloadUrl(req, videoUrl) {
 function sanitizePrompt(text = '') {
   let output = text;
   const replacements = [
-    [/chainsaw\s+man/gi, 'comic'],
-    [/denji/gi, 'the main character'],
-    [/pochita/gi, 'the small creature'],
-    [/manga/gi, 'comic'],
-    [/anime/gi, 'animated'],
-    [/chainsaw/gi, 'mechanical tool'],
-    [/\bsaw\b/gi, 'tool'],
-    [/blade/gi, 'tool'],
-    [/weapon(s)?/gi, 'prop'],
-    [/gun(s)?/gi, 'prop'],
-    [/dog/gi, 'pet'],
-    [/barking/gi, 'yipping'],
-    [/teeth/gi, 'smile'],
-    [/toothy/gi, 'wide smile'],
-    [/kill(?:ing|ed)?/gi, 'fight'],
-    [/murder(?:ed|ing)?/gi, 'harm'],
-    [/blood|gore|dismember|decapitat(?:e|ed|ion)?|sever|explode|explosion/gi, '']
+    // // Franchise/character names - remove entirely
+    // [/chainsaw\s*man/gi, 'illustrated character'],
+    // [/jujutsu\s*kaisen/gi, 'illustrated scene'],
+    // [/demon\s*slayer/gi, 'illustrated scene'],
+    // [/one\s*piece/gi, 'illustrated scene'],
+    // [/naruto/gi, 'the character'],
+    // [/goku/gi, 'the character'],
+    // [/denji/gi, 'the character'],
+    // [/pochita/gi, 'the creature'],
+    // [/gojo/gi, 'the character'],
+    // [/sukuna/gi, 'the character'],
+    // [/itadori/gi, 'the character'],
+    // [/manga/gi, 'illustrated art'],
+    // [/anime/gi, 'animated art'],
+    // // Weapons - neutralize
+    // [/chainsaw/gi, ''],
+    // [/\bsaw\b/gi, ''],
+    // [/blade(s)?/gi, ''],
+    // [/sword(s)?/gi, ''],
+    // [/knife|knives/gi, ''],
+    // [/weapon(s)?/gi, ''],
+    // [/gun(s)?/gi, ''],
+    // [/spear(s)?/gi, ''],
+    // [/axe(s)?/gi, ''],
+    // // Violence words - replace with artistic/motion terms
+    // [/fight(?:ing|s)?/gi, 'dynamic motion'],
+    // [/fought/gi, 'moved dynamically'],
+    // [/attack(?:ing|ed|s)?/gi, 'swift motion'],
+    // [/punch(?:ing|ed|es)?/gi, 'arm extension'],
+    // [/kick(?:ing|ed|s)?/gi, 'leg motion'],
+    // [/hit(?:ting|s)?/gi, 'motion'],
+    // [/strike|struck|striking/gi, 'swift gesture'],
+    // [/slash(?:ing|ed|es)?/gi, 'sweeping motion'],
+    // [/stab(?:bing|bed|s)?/gi, 'forward motion'],
+    // [/battle/gi, 'dynamic scene'],
+    // [/combat/gi, 'dynamic movement'],
+    // [/violen(?:t|ce)/gi, 'intense'],
+    // [/\bwar\b/gi, 'confrontation'],
+    // // Harm/death words - remove
+    // [/kill(?:ing|ed|s|er)?/gi, ''],
+    // [/murder(?:ed|ing|er)?/gi, ''],
+    // [/death|dead|dying|die/gi, ''],
+    // [/blood(?:y)?/gi, ''],
+    // [/bleed(?:ing)?/gi, ''],
+    // [/gore|gory/gi, ''],
+    // [/wound(?:ed|s)?/gi, ''],
+    // [/injur(?:e|ed|y|ies)/gi, ''],
+    // [/hurt(?:ing)?/gi, ''],
+    // [/pain(?:ful)?/gi, 'intensity'],
+    // [/dismember|decapitat(?:e|ed|ion)?|sever(?:ed)?/gi, ''],
+    // [/explod(?:e|ed|ing)|explosion/gi, 'burst of energy'],
+    // [/destroy(?:ed|ing)?|destruct(?:ion)?/gi, 'dramatic effect'],
+    // // Body parts that might trigger filters
+    // [/fist(s)?/gi, 'hand'],
+    // [/clenched\s*fist/gi, 'tense hand'],
+    // // Other
+    // [/dog/gi, 'creature'],
+    // [/barking/gi, 'calling'],
+    // [/teeth/gi, 'expression'],
+    // [/toothy/gi, 'wide'],
+    // [/demon(s)?/gi, 'character'],
+    // [/cursed/gi, 'mystical'],
+    // [/curse(s)?/gi, 'energy']
   ];
 
   for (const [pattern, replacement] of replacements) {
@@ -209,17 +258,31 @@ async function buildPromptFromImage({ imageData, mimeType }) {
   }
 
   const analysisPrompt = [
-    'Analyze this reference page for animation.',
-    'Return a detailed, factual panel-by-panel breakdown.',
-    'For each panel, describe: main subjects, their pose/expression (as shown), setting/background, props, and the implied action/energy.',
-    'For each panel, list 2-3 specific motion beats that can be animated without changing the art (e.g., arm swing, head turn, recoil, step, hair/cloth sway).',
-    'Identify which panels are main/primary panels with key characters.',
-    'Also note the page borders, gutters, and panel frames as fixed elements that must not move or change.',
-    'Call out any fragile details (faces, props, text) that must not morph.',
-    'Do NOT mention any franchise/series names or character names. Describe subjects generically.',
-    'Do not invent details that are not visible.',
-    'Do not describe art style, colors, lighting, or drawing quality.'
-  ].join(' ');
+    'Analyze this manga/comic panel to identify characters and their current poses/actions.',
+    'This is for creating SUBTLE ANIMATIONS that bring the EXISTING ART to life.',
+    '',
+    '=== CRITICAL: PRESERVE THE ORIGINAL ART ===',
+    'The manga panel must stay EXACTLY as drawn. Do NOT change, redraw, or alter the artwork.',
+    'Only describe small, natural movements that enhance what is ALREADY shown.',
+    '',
+    'For EACH character visible, describe:',
+    '1. POSITION: Where in the panel? (left, center, right, foreground, background)',
+    '2. CURRENT POSE: Describe their exact pose as drawn (arm positions, leg positions, body angle)',
+    '3. EXPRESSION: What emotion is shown on their face?',
+    '4. SUGGESTED MICRO-ANIMATIONS (small movements that fit their pose):',
+    '   - If in dynamic pose: subtle muscle tension, slight tremor, energy buildup',
+    '   - If in motion pose: hair/clothing trails the motion direction, limbs show follow-through',
+    '   - If standing/idle: gentle breathing, slight sway, blinking, hair drift',
+    '   - If emotional: facial micro-expressions, breathing changes, subtle body language',
+    '5. SECONDARY ELEMENTS: Hair, clothing, accessories that would naturally move',
+    '',
+    'RULES:',
+    '- Describe ONLY what is visible in the image - do not invent new elements',
+    '- Animations must be SUBTLE and NATURAL - not dramatic changes',
+    '- The character\'s appearance, design, and pose must remain UNCHANGED',
+    '- Do NOT mention any franchise, series, or character names',
+    '- Describe poses artistically (athletic stance, dynamic gesture, reaching motion)'
+  ].join('\n');
 
   const analysisContents = [
     {
@@ -247,27 +310,49 @@ async function buildPromptFromImage({ imageData, mimeType }) {
   });
 
   const promptBuilderInstruction = [
-    'You are an animation prompt compiler, not an artist.',
-    'Your output must NOT be creative. It must only list allowed micro-motions for existing elements.',
-    'Do not describe art style, colors, lighting, or drawing quality.',
-    'Do not invent new objects, effects, or background details.',
-    'Output only the following two sections (nothing else):',
+    'Create animation instructions for a manga panel. The goal is to add LIFE to the existing artwork.',
     '',
-    'CHARACTERS DETECTED (by panel):',
-    '- Panel 1: <short neutral description>',
-    '- Panel 2: <short neutral description>',
+    '=== ABSOLUTE REQUIREMENT: PRESERVE THE ORIGINAL ART ===',
+    'The manga artwork must remain EXACTLY as drawn:',
+    '- Same character designs, proportions, and line art',
+    '- Same poses, positions, and compositions',
+    '- Same colors, shading, and art style',
+    '- Same panel layout and borders',
     '',
-    'ALLOWED MOTION (by panel):',
-    '- Panel 1: <2-3 micro-motions, pixel-level; e.g., eyelids move 1–2px, chest line rises/falls, hair tips shift 1–2px>',
-    '- Panel 2: <2-3 micro-motions>',
+    '=== WHAT TO ANIMATE ===',
+    'Add SUBTLE, NATURAL micro-movements that enhance the existing poses:',
     '',
-    'Rules:',
-    '- Keep 1-2 sentences per panel in ALLOWED MOTION.',
-    '- Every panel must have visible motion using existing elements only.',
-    '- If a panel has no characters, animate existing background textures (clouds/foliage/lines) gently without inventing new objects.',
-    '- Do NOT change character design; keep faces, proportions, outfits, and line art extremely close to the original.',
-    '- All motion must stay inside its panel box. No cross-panel leaks or new areas.',
-    '- Avoid franchise/series names and character names. Do NOT quote dialogue/SFX text.',
+    'FOR DYNAMIC POSES (characters in athletic/action stances):',
+    '- Subtle muscle tension and release',
+    '- Hair and clothing responding to implied motion',
+    '- Slight trembling from exerted energy',
+    '- Eyes tracking or intensity shifts',
+    '- Breathing that matches their effort level',
+    '',
+    'FOR EXPRESSIVE POSES (characters showing emotion):',
+    '- Subtle facial shifts (eye movement, brow tension, mouth adjustments)',
+    '- Chest rising/falling with breathing',
+    '- Small shoulder or hand movements',
+    '- Hair responding to any head movement',
+    '',
+    'FOR IDLE/STANDING POSES:',
+    '- Gentle breathing animation',
+    '- Soft blinking',
+    '- Slight natural sway',
+    '- Hair drifting gently',
+    '- Clothing settling',
+    '',
+    '=== OUTPUT FORMAT ===',
+    'Character (position): [Pose type] - [Micro-animations: specific subtle movements] | [Hair/clothing: physics] | [Face: expression shifts]',
+    'Background: COMPLETELY STATIC (no movement)',
+    '',
+    '=== FORBIDDEN ===',
+    '- DO NOT change character appearance or design',
+    '- DO NOT add new elements not in the original',
+    '- DO NOT move the camera, frame, or panel',
+    '- DO NOT redraw or alter the art style',
+    '- DO NOT use words: violent, fight, attack, punch, kick, hit, strike, battle, combat, weapon, blood, kill, death',
+    '- Instead use: dynamic pose, athletic stance, energetic gesture, reaching motion, swift movement',
     '',
     'Reference analysis:',
     analysis.text || '(no analysis)'
