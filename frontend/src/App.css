@@ -158,6 +158,26 @@ body {
   display: block;
 }
 
+.page-border-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  --border: 14px;
+  -webkit-mask:
+    linear-gradient(#000 0 0) top/100% var(--border) no-repeat,
+    linear-gradient(#000 0 0) bottom/100% var(--border) no-repeat,
+    linear-gradient(#000 0 0) left/var(--border) 100% no-repeat,
+    linear-gradient(#000 0 0) right/var(--border) 100% no-repeat;
+  mask:
+    linear-gradient(#000 0 0) top/100% var(--border) no-repeat,
+    linear-gradient(#000 0 0) bottom/100% var(--border) no-repeat,
+    linear-gradient(#000 0 0) left/var(--border) 100% no-repeat,
+    linear-gradient(#000 0 0) right/var(--border) 100% no-repeat;
+  z-index: 3;
+}
+
 .video-overlay {
   position: absolute;
   inset: 0;
