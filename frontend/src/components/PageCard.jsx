@@ -1,18 +1,9 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect } from 'react';
 import VideoOverlay from './VideoOverlay.jsx';
 import { useIntersectionObserver } from '../hooks/useIntersectionObserver.js';
 
-const STATUS_LABELS = {
-  idle: 'Not generated',
-  generating: 'Generating...',
-  ready: 'Ready',
-  failed: 'Failed'
-};
-
-export default function PageCard({ page, pageIndex, state = { status: 'idle', videoUrl: null, error: null }, onGenerate, onRegenerate, prefetchFn }) {
+export default function PageCard({ page, pageIndex, state = { status: 'idle', videoUrl: null, error: null }, showVideo, prefetchFn }) {
   const containerRef = useRef(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [showVideo, setShowVideo] = useState(false);
   
   const { isIntersecting, isNearViewport } = useIntersectionObserver(containerRef, {
     threshold: 0.3,
@@ -26,30 +17,10 @@ export default function PageCard({ page, pageIndex, state = { status: 'idle', vi
     }
   }, [isNearViewport, state.status, pageIndex, prefetchFn]);
 
-  // Auto-play when in view
-  useEffect(() => {
-    if (state.status === 'ready') {
-      if (isIntersecting) {
-        setShowVideo(true);
-        setIsPlaying(true);
-      } else {
-        setIsPlaying(false);
-      }
-    }
-  }, [isIntersecting, state.status]);
-
-  const togglePlay = useCallback(() => {
-    setIsPlaying(p => !p);
-  }, []);
-
-  const handleDownload = useCallback(() => {
-    if (state.videoUrl) {
-      const a = document.createElement('a');
-      a.href = state.videoUrl;
-      a.download = `page-${pageIndex + 1}.mp4`;
-      a.click();
-    }
-  }, [state.videoUrl, pageIndex]);
+  const isReady = state.status === 'ready';
+  const shouldShowVideo = showVideo && isReady;
+  const isPlaying = shouldShowVideo && isIntersecting;
+  const showStatus = state.status === 'generating' || state.status === 'failed';
 
   return (
     <div className="page-card" ref={containerRef}>
@@ -60,47 +31,21 @@ export default function PageCard({ page, pageIndex, state = { status: 'idle', vi
           className="page-image"
         />
         
-        {state.status === 'ready' && showVideo && (
+        {isReady && (
           <VideoOverlay
             videoUrl={state.videoUrl}
+            baseImageUrl={page.dataUrl}
             isPlaying={isPlaying}
-            visible={showVideo}
+            visible={shouldShowVideo}
           />
         )}
-      </div>
-      
-      <div className="page-controls">
-        <span className={`status-badge ${state.status}`}>
-          {STATUS_LABELS[state.status]}
-          {state.isMock && ' (Demo)'}
-          {state.error && `: ${state.error}`}
-        </span>
-        
-        <div className="control-buttons">
-          {state.status === 'ready' && (
-            <>
-              <button className="icon-btn" onClick={togglePlay} title={isPlaying ? 'Pause' : 'Play'}>
-                {isPlaying ? '⏸' : '▶'}
-              </button>
-              <button className="icon-btn" onClick={handleDownload} title="Download">
-                ⬇
-              </button>
-              <button className="generate-btn" onClick={onRegenerate}>
-                Regenerate
-              </button>
-            </>
-          )}
-          
-          {(state.status === 'idle' || state.status === 'failed') && (
-            <button className="generate-btn" onClick={onGenerate}>
-              Generate
-            </button>
-          )}
-          
-          {state.status === 'generating' && (
-            <div className="spinner" style={{ width: 20, height: 20 }} />
-          )}
-        </div>
+
+        {showStatus && (
+          <div className={`page-status ${state.status}`}>
+            {state.status === 'generating' && 'Generating...'}
+            {state.status === 'failed' && (state.error ? `Failed: ${state.error}` : 'Failed')}
+          </div>
+        )}
       </div>
     </div>
   );

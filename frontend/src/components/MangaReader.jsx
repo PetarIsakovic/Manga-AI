@@ -1,19 +1,24 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import PageCard from './PageCard.jsx';
 import { useVideoCache } from '../hooks/useVideoCache.js';
 import { generateVideo } from '../utils/api.js';
 
-const MAX_CONCURRENT = 1;
 const PREFETCH_ENABLED = false;
 
 export default function MangaReader({ pages, pdfHash }) {
   const [pageStates, setPageStates] = useState(() =>
     pages.map(() => ({ status: 'idle', videoUrl: null, error: null }))
   );
-  const [generatingAll, setGeneratingAll] = useState(false);
-  const [progress, setProgress] = useState({ current: 0, total: 0 });
-  const abortRef = useRef(false);
-  const { getVideo, setVideo } = useVideoCache();
+  const [showVideos, setShowVideos] = useState(true);
+  const nextIndexRef = useRef(0);
+  const generatingRef = useRef(false);
+  const { setVideo } = useVideoCache();
+
+  useEffect(() => {
+    setPageStates(pages.map(() => ({ status: 'idle', videoUrl: null, error: null })));
+    nextIndexRef.current = 0;
+    setShowVideos(true);
+  }, [pages]);
 
   const updatePageState = useCallback((index, update) => {
     setPageStates(prev => {
@@ -23,7 +28,7 @@ export default function MangaReader({ pages, pdfHash }) {
     });
   }, []);
 
-  const generateForPage = useCallback(async (pageIndex, force = false) => {
+  const generateForPage = useCallback(async (pageIndex) => {
     const page = pages[pageIndex];
     const cacheKey = `${pdfHash}-${pageIndex}-${Date.now()}`;
     
@@ -48,56 +53,50 @@ export default function MangaReader({ pages, pdfHash }) {
       
       await setVideo(cacheKey, videoUrl);
       updatePageState(pageIndex, { status: 'ready', videoUrl });
+      return true;
     } catch (error) {
       console.error('❌ Generation failed:', error);
       updatePageState(pageIndex, { status: 'failed', error: error.message });
+      return false;
     }
   }, [pages, pdfHash, setVideo, updatePageState]);
 
-  const generateAll = useCallback(async () => {
-    if (generatingAll) {
-      abortRef.current = true;
-      return;
-    }
-    
-    abortRef.current = false;
-    setGeneratingAll(true);
-    
-    const pending = pages
-      .map((_, i) => i)
-      .filter(i => pageStates[i].status !== 'ready');
-    
-    setProgress({ current: 0, total: pending.length });
-    
-    for (let i = 0; i < pending.length; i += MAX_CONCURRENT) {
-      if (abortRef.current) break;
-      
-      const batch = pending.slice(i, i + MAX_CONCURRENT);
-      await Promise.all(batch.map(idx => generateForPage(idx)));
-      setProgress(p => ({ ...p, current: Math.min(p.current + batch.length, p.total) }));
-    }
-    
-    setGeneratingAll(false);
-  }, [generatingAll, pages, pageStates, generateForPage]);
+  const generateNextPage = useCallback(() => {
+    if (generatingRef.current) return;
+    const idx = nextIndexRef.current;
+    if (idx >= pages.length) return;
 
-  const readyCount = pageStates.filter(s => s.status === 'ready').length;
+    generatingRef.current = true;
+    generateForPage(idx).then(ok => {
+      if (ok) {
+        nextIndexRef.current = Math.min(idx + 1, pages.length);
+      }
+      generatingRef.current = false;
+    });
+  }, [generateForPage, pages.length]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const target = event.target;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === 'k') {
+        event.preventDefault();
+        generateNextPage();
+      } else if (key === 'j') {
+        event.preventDefault();
+        setShowVideos(prev => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [generateNextPage]);
 
   return (
     <div className="manga-reader">
-      <div className="reader-controls">
-        <button
-          className="generate-all-btn"
-          onClick={generateAll}
-          disabled={readyCount === pages.length}
-        >
-          {generatingAll ? 'Stop' : 'Generate All Pages'}
-        </button>
-        <span className="progress-info">
-          {readyCount} / {pages.length} ready
-          {generatingAll && ` (${progress.current}/${progress.total})`}
-        </span>
-      </div>
-      
       <div className="pages-container">
         {pages.map((page, index) => (
           <PageCard
@@ -105,8 +104,7 @@ export default function MangaReader({ pages, pdfHash }) {
             page={page}
             pageIndex={index}
             state={pageStates[index] || { status: 'idle', videoUrl: null, error: null }}
-            onGenerate={() => generateForPage(index)}
-            onRegenerate={() => generateForPage(index, true)}
+            showVideo={showVideos}
             prefetchFn={PREFETCH_ENABLED ? generateForPage : null}
           />
         ))}

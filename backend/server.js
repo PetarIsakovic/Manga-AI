@@ -48,19 +48,19 @@ const VERTEX_MODEL = process.env.VERTEX_MODEL || VEO_MODEL;
 const VERTEX_OUTPUT_GCS_URI = process.env.VERTEX_OUTPUT_GCS_URI;
 const PORT = process.env.PORT || 3001;
 
-const ANIMATION_PROMPT = `You are an anime motion director. Animate this manga page into an 8-second MP4 that feels like the original page gently comes alive.
+const ANIMATION_PROMPT = `You are an anime motion director. Animate this manga page into an 8-second MP4 that feels like a high-quality anime adaptation of the SAME page.
 
 Rules:
-- Preserve the original line art, composition, and text exactly. Do NOT redraw, add, or remove characters/objects.
-- Animate every character and visible subject on the page (all panels/foreground/background figures). No one should remain completely static.
-- Camera: locked. No zoom, pan, tilt, parallax, or scrolling. Keep the full page in frame at all times. Do not crop or move between panels. Do not add new pages.
-- Effects are optional and must stay minimal:
-  - If the page suggests it, add ONE: soft smoke wisps OR light rain (very subtle).
-  - If a power-up/aura is present, add a faint glow.
-  - If impact/motion lines exist, add a tiny shake + brief micro-flash.
-  - Otherwise, no effects.
-- Keep tones faithful to the page. No heavy color grading, no neon unless already present.
-- Loop-friendly start/end frames, no hard cuts.
+- Match the original manga art style exactly. Preserve line art, proportions, faces, outfits, and panel layout. No restyling or redesign.
+- Animate every character/subject in every panel. If a character appears in multiple panels, animate each instance separately.
+- Motion should feel anime-like and action-driven: strong limb motion, pose shifts, expressive gestures, hair/cloth movement, and clear action beats implied by the panel. Keep it readable and faithful to the original art.
+- Text & props are sacred: do NOT alter, warp, erase, or replace any text, bubbles, SFX, or props (e.g., chainsaws/weapons). Keep them perfectly static and intact.
+- Colors must stay exactly as the source (no desaturation or B/W conversion).
+- Page integrity: treat the page as a fixed canvas. No page drift, no scaling, no rotation. Panel borders and gutters are fixed and aligned.
+- Panel integrity: each panel is a HARD MASK. Content must stay inside its own panel and never cross borders or leak into another panel.
+- Do NOT scroll, crop, reveal, or invent any new parts of the page. Do NOT extend the canvas or generate off-page content. Preserve margins, borders, watermarks, and printing artifacts exactly.
+- Camera: ABSOLUTELY LOCKED. Zero zoom, pan, tilt, parallax, or scrolling. Full page always in frame.
+
 Output: MP4 only. 8s, 24fps, resolution and aspect ratio as specified. No audio.`;
 
 let veoCooldownUntil = 0;

@@ -125,55 +125,16 @@ body {
 /* Manga Reader */
 .manga-reader {
   flex: 1;
-  padding: 1rem;
-}
-
-.reader-controls {
-  position: sticky;
-  top: 60px;
-  z-index: 50;
-  background: rgba(10, 10, 10, 0.95);
-  backdrop-filter: blur(10px);
-  padding: 0.75rem 1rem;
-  margin-bottom: 1rem;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.generate-all-btn {
-  padding: 0.5rem 1rem;
-  background: #2563eb;
-  border: none;
-  color: white;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 0.875rem;
-  transition: background 0.2s;
-}
-
-.generate-all-btn:hover:not(:disabled) {
-  background: #1d4ed8;
-}
-
-.generate-all-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.progress-info {
-  font-size: 0.875rem;
-  color: #888;
+  padding: 0;
 }
 
 .pages-container {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1.5rem;
-  max-width: 800px;
+  gap: 0;
+  width: 95vw;
+  max-width: 95vw;
   margin: 0 auto;
 }
 
@@ -182,7 +143,7 @@ body {
   position: relative;
   width: 100%;
   background: #111;
-  border-radius: 8px;
+  border-radius: 0;
   overflow: hidden;
 }
 
@@ -202,6 +163,7 @@ body {
   inset: 0;
   opacity: 0;
   transition: opacity 0.5s ease;
+  pointer-events: none;
 }
 
 .video-overlay.visible {
@@ -212,91 +174,29 @@ body {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #000;
+  background: transparent;
 }
 
-.page-controls {
+.page-status {
   position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  padding: 0.75rem;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.status-badge {
+  top: 12px;
+  left: 12px;
+  padding: 0.35rem 0.6rem;
   font-size: 0.75rem;
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  background: #222;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  max-width: calc(100% - 24px);
 }
 
-.status-badge.generating {
-  background: #f59e0b;
+.page-status.generating {
+  background: rgba(245, 158, 11, 0.85);
   color: #000;
 }
 
-.status-badge.ready {
-  background: #10b981;
-  color: #000;
-}
-
-.status-badge.failed {
-  background: #ef4444;
+.page-status.failed {
+  background: rgba(239, 68, 68, 0.85);
   color: #fff;
-}
-
-.control-buttons {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.icon-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  border: none;
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.875rem;
-  transition: background 0.2s;
-}
-
-.icon-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-.icon-btn:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
-
-.generate-btn {
-  padding: 0.375rem 0.75rem;
-  background: #2563eb;
-  border: none;
-  color: white;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 0.75rem;
-  transition: background 0.2s;
-}
-
-.generate-btn:hover:not(:disabled) {
-  background: #1d4ed8;
-}
-
-.generate-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* Responsive */
@@ -309,9 +209,8 @@ body {
     font-size: 1rem;
   }
   
-  .reader-controls {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.5rem;
+  .pages-container {
+    width: 98vw;
+    max-width: 98vw;
   }
 }
