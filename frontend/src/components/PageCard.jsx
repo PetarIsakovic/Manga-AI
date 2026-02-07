@@ -40,6 +40,13 @@ export default function PageCard({ page, pageIndex, state = { status: 'idle', vi
           />
         )}
 
+        <img
+          src={page.dataUrl}
+          alt=""
+          aria-hidden="true"
+          className="page-border-overlay"
+        />
+
         {showStatus && (
           <div className={`page-status ${state.status}`}>
             {state.status === 'generating' && 'Generating...'}

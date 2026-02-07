@@ -1,8 +1,8 @@
 import React, { useRef, useEffect, useState } from 'react';
 
-const SAMPLE_SIZE = 64;
-const BORDER_SIZE = 4;
-const EDGE_DIFF_THRESHOLD = 22;
+const SAMPLE_SIZE = 128;
+const BORDER_SIZE = 10;
+const EDGE_DIFF_THRESHOLD = 8;
 
 export default function VideoOverlay({ videoUrl, baseImageUrl, isPlaying, visible }) {
   const videoRef = useRef(null);
@@ -11,6 +11,7 @@ export default function VideoOverlay({ videoUrl, baseImageUrl, isPlaying, visibl
   const baseCanvasRef = useRef(null);
   const frameCanvasRef = useRef(null);
   const rafRef = useRef(null);
+  const driftLockedRef = useRef(false);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -69,6 +70,10 @@ export default function VideoOverlay({ videoUrl, baseImageUrl, isPlaying, visibl
     const baseCtx = baseCanvas.getContext('2d');
 
     const checkEdges = () => {
+      if (driftLockedRef.current) {
+        rafRef.current = requestAnimationFrame(checkEdges);
+        return;
+      }
       if (visible && video.readyState >= 2) {
         frameCtx.drawImage(video, 0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
         const baseData = baseCtx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE).data;
@@ -94,10 +99,11 @@ export default function VideoOverlay({ videoUrl, baseImageUrl, isPlaying, visibl
 
         const avgDiff = count ? diffSum / count : 0;
         if (avgDiff > EDGE_DIFF_THRESHOLD) {
+          driftLockedRef.current = true;
           if (!edgeDrift) {
             setEdgeDrift(true);
-            video.pause();
           }
+          video.pause();
         } else if (edgeDrift) {
           setEdgeDrift(false);
           if (isPlaying) {
@@ -116,7 +122,7 @@ export default function VideoOverlay({ videoUrl, baseImageUrl, isPlaying, visibl
   }, [edgeDrift, isPlaying, visible]);
 
   return (
-    <div className={`video-overlay ${visible && ready ? 'visible' : ''}`}>
+    <div className={`video-overlay ${visible && ready && !edgeDrift ? 'visible' : ''}`}>
       <video
         ref={videoRef}
         src={videoUrl}

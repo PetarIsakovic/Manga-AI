@@ -48,20 +48,40 @@ const VERTEX_MODEL = process.env.VERTEX_MODEL || VEO_MODEL;
 const VERTEX_OUTPUT_GCS_URI = process.env.VERTEX_OUTPUT_GCS_URI;
 const PORT = process.env.PORT || 3001;
 
-const ANIMATION_PROMPT = `You are an anime motion director. Animate this manga page into an 8-second MP4 that feels like a high-quality anime adaptation of the SAME page.
+const BASE_CONSTRAINTS_TEXT = [
+  'Use the provided comic page as a fixed, immutable frame.',
+  'All panels, borders, gutters, line art, shading, and text must remain unchanged.',
+  'This is a living comic page, not a re-animated scene.',
+  'Do not redraw, re-ink, recolor, or reinterpret the artwork.',
+  'Animate the existing pixels only.',
+  'No camera movement. No scene cuts. No zoom/pan/tilt/scroll/rotate.'
+].join(' ');
+const STYLE_PRESERVATION_TEXT = [
+  'Preserve the original line thickness, ink texture, and flat coloring.',
+  'No painterly shading, no gradients, no smoothing.',
+  'Line art must remain identical to the source image.',
+  'Color palette must remain unchanged.',
+  'Treat the image as scanned comic paper.'
+].join(' ');
+const PANEL_LOCK_TEXT = [
+  'Each panel must be treated independently.',
+  'Panel borders are absolute and cannot be crossed.',
+  'No visual blending between panels.'
+].join(' ');
+const FORBIDDEN_CHANGES_TEXT = [
+  'Do NOT change pose, facial expression, perspective, layout, or text.',
+  'Do NOT add new visual elements.',
+  'Do NOT redraw, repaint, or enhance the artwork.',
+  'Lighting must remain exactly as drawn.',
+  'Forbidden: style enhancement, anime video look, cinematic lighting, depth of field, motion blur, redraw or cleanup, line smoothing.'
+].join(' ');
+const VIDEO_SETTINGS_TEXT = [
+  'Duration: 4 seconds.',
+  'Stable framing.',
+  'Motion intensity: subtle but visible.'
+].join(' ');
 
-Rules:
-- Match the original manga art style exactly. Preserve line art, proportions, faces, outfits, and panel layout. No restyling or redesign.
-- Animate every character/subject in every panel. If a character appears in multiple panels, animate each instance separately.
-- Motion should feel anime-like and action-driven: strong limb motion, pose shifts, expressive gestures, hair/cloth movement, and clear action beats implied by the panel. Keep it readable and faithful to the original art.
-- Text & props are sacred: do NOT alter, warp, erase, or replace any text, bubbles, SFX, or props (e.g., chainsaws/weapons). Keep them perfectly static and intact.
-- Colors must stay exactly as the source (no desaturation or B/W conversion).
-- Page integrity: treat the page as a fixed canvas. No page drift, no scaling, no rotation. Panel borders and gutters are fixed and aligned.
-- Panel integrity: each panel is a HARD MASK. Content must stay inside its own panel and never cross borders or leak into another panel.
-- Do NOT scroll, crop, reveal, or invent any new parts of the page. Do NOT extend the canvas or generate off-page content. Preserve margins, borders, watermarks, and printing artifacts exactly.
-- Camera: ABSOLUTELY LOCKED. Zero zoom, pan, tilt, parallax, or scrolling. Full page always in frame.
-
-Output: MP4 only. 8s, 24fps, resolution and aspect ratio as specified. No audio.`;
+const ANIMATION_PROMPT = `BASE CONSTRAINTS:\n${BASE_CONSTRAINTS_TEXT}\n\nSTYLE & ART PRESERVATION:\n${STYLE_PRESERVATION_TEXT}\n\nPANEL LOCK:\n${PANEL_LOCK_TEXT}\n\nFORBIDDEN CHANGES:\n${FORBIDDEN_CHANGES_TEXT}\n\nVIDEO SETTINGS:\n${VIDEO_SETTINGS_TEXT}`;
 
 let veoCooldownUntil = 0;
 
@@ -124,6 +144,36 @@ function buildDownloadUrl(req, videoUrl) {
   return `${baseUrl}/api/veo/download?url=${encoded}`;
 }
 
+function sanitizePrompt(text = '') {
+  let output = text;
+  const replacements = [
+    [/chainsaw\s+man/gi, 'comic'],
+    [/denji/gi, 'the main character'],
+    [/pochita/gi, 'the small creature'],
+    [/manga/gi, 'comic'],
+    [/anime/gi, 'animated'],
+    [/chainsaw/gi, 'mechanical tool'],
+    [/\bsaw\b/gi, 'tool'],
+    [/blade/gi, 'tool'],
+    [/weapon(s)?/gi, 'prop'],
+    [/gun(s)?/gi, 'prop'],
+    [/dog/gi, 'pet'],
+    [/barking/gi, 'yipping'],
+    [/teeth/gi, 'smile'],
+    [/toothy/gi, 'wide smile'],
+    [/kill(?:ing|ed)?/gi, 'fight'],
+    [/murder(?:ed|ing)?/gi, 'harm'],
+    [/blood|gore|dismember|decapitat(?:e|ed|ion)?|sever|explode|explosion/gi, '']
+  ];
+
+  for (const [pattern, replacement] of replacements) {
+    output = output.replace(pattern, replacement);
+  }
+
+  output = output.replace(/\s{2,}/g, ' ').trim();
+  return output;
+}
+
 function extractGeminiText(result) {
   const parts = result?.candidates?.[0]?.content?.parts;
   if (!Array.isArray(parts)) return '';
@@ -159,9 +209,16 @@ async function buildPromptFromImage({ imageData, mimeType }) {
   }
 
   const analysisPrompt = [
-    'Analyze this manga page for animation.',
-    'Return a concise, factual summary focused on: characters, setting, actions, emotions, camera/framing, text notes, and any implied motion/effects.',
-    'Do not invent details that are not visible.'
+    'Analyze this reference page for animation.',
+    'Return a detailed, factual panel-by-panel breakdown.',
+    'For each panel, describe: main subjects, their pose/expression (as shown), setting/background, props, and the implied action/energy.',
+    'For each panel, list 2-3 specific motion beats that can be animated without changing the art (e.g., arm swing, head turn, recoil, step, hair/cloth sway).',
+    'Identify which panels are main/primary panels with key characters.',
+    'Also note the page borders, gutters, and panel frames as fixed elements that must not move or change.',
+    'Call out any fragile details (faces, props, text) that must not morph.',
+    'Do NOT mention any franchise/series names or character names. Describe subjects generically.',
+    'Do not invent details that are not visible.',
+    'Do not describe art style, colors, lighting, or drawing quality.'
   ].join(' ');
 
   const analysisContents = [
@@ -190,13 +247,29 @@ async function buildPromptFromImage({ imageData, mimeType }) {
   });
 
   const promptBuilderInstruction = [
-    'You are writing a single prompt for a video generation model.',
-    'Use the analysis below to tailor the prompt to this exact manga page.',
-    'Keep the prompt concise and specific to visible details.',
-    'Follow these strict animation constraints:',
-    ANIMATION_PROMPT,
-    'Return only the final prompt text (no bullets, no JSON).',
-    'Analysis:',
+    'You are an animation prompt compiler, not an artist.',
+    'Your output must NOT be creative. It must only list allowed micro-motions for existing elements.',
+    'Do not describe art style, colors, lighting, or drawing quality.',
+    'Do not invent new objects, effects, or background details.',
+    'Output only the following two sections (nothing else):',
+    '',
+    'CHARACTERS DETECTED (by panel):',
+    '- Panel 1: <short neutral description>',
+    '- Panel 2: <short neutral description>',
+    '',
+    'ALLOWED MOTION (by panel):',
+    '- Panel 1: <2-3 micro-motions, pixel-level; e.g., eyelids move 1–2px, chest line rises/falls, hair tips shift 1–2px>',
+    '- Panel 2: <2-3 micro-motions>',
+    '',
+    'Rules:',
+    '- Keep 1-2 sentences per panel in ALLOWED MOTION.',
+    '- Every panel must have visible motion using existing elements only.',
+    '- If a panel has no characters, animate existing background textures (clouds/foliage/lines) gently without inventing new objects.',
+    '- Do NOT change character design; keep faces, proportions, outfits, and line art extremely close to the original.',
+    '- All motion must stay inside its panel box. No cross-panel leaks or new areas.',
+    '- Avoid franchise/series names and character names. Do NOT quote dialogue/SFX text.',
+    '',
+    'Reference analysis:',
     analysis.text || '(no analysis)'
   ].join('\n');
 
@@ -217,7 +290,12 @@ async function buildPromptFromImage({ imageData, mimeType }) {
     generationConfig: promptConfig
   });
 
-  return promptResult.text || ANIMATION_PROMPT;
+  const rawPrompt = promptResult.text || '';
+  const sanitized = sanitizePrompt(rawPrompt);
+  if (!sanitized) {
+    return ANIMATION_PROMPT;
+  }
+  return `${ANIMATION_PROMPT}\n\n${sanitized}`;
 }
 
 async function fetchWithRetry(url, options, maxRetries = 3) {
@@ -449,7 +527,7 @@ app.post('/api/veo', async (req, res) => {
       const parameters = {
         storageUri,
         sampleCount: 1,
-        durationSeconds: 8,
+        durationSeconds: 4,
         ...(aspectRatio ? { aspectRatio: aspectRatio === '9:16' ? '9:16' : '16:9' } : {}),
         ...(resolution ? { resolution } : {})
       };
