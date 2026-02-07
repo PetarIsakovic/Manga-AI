@@ -30,6 +30,12 @@ const VEO_INCLUDE_IMAGE = process.env.VEO_INCLUDE_IMAGE !== 'false';
 const VEO_PROVIDER = (process.env.VEO_PROVIDER || 'gemini').toLowerCase();
 const VEO_REQUIRE_IMAGE = process.env.VEO_REQUIRE_IMAGE !== 'false';
 const VEO_ALLOW_IMAGE_FALLBACK = process.env.VEO_ALLOW_IMAGE_FALLBACK === 'true';
+const VEO_GEMINI_IMAGE_MODE = (process.env.VEO_GEMINI_IMAGE_MODE || 'reference').toLowerCase();
+const VEO_USE_GEMINI3_PROMPT = process.env.VEO_USE_GEMINI3_PROMPT === 'true';
+const VEO_DEBUG_PROMPT = process.env.VEO_DEBUG_PROMPT === 'true';
+const GEMINI3_ANALYSIS_MODEL = process.env.GEMINI3_ANALYSIS_MODEL || 'gemini-3-flash-preview';
+const GEMINI3_PROMPT_MODEL = process.env.GEMINI3_PROMPT_MODEL || GEMINI3_ANALYSIS_MODEL;
+const GEMINI3_THINKING_LEVEL = process.env.GEMINI3_THINKING_LEVEL;
 const VEO_MAX_CONCURRENT = Number.isInteger(parseInt(process.env.VEO_MAX_CONCURRENT, 10))
   ? parseInt(process.env.VEO_MAX_CONCURRENT, 10)
   : 1;
@@ -46,8 +52,8 @@ const ANIMATION_PROMPT = `You are an anime motion director. Animate this manga p
 
 Rules:
 - Preserve the original line art, composition, and text exactly. Do NOT redraw, add, or remove characters/objects.
-- Only subtle motion inside existing art: natural eye blinks, very light hair/clothing sway, gentle ambient motion.
-- Camera: minimal parallax push-in or slight depth drift, never outside the page bounds. No dramatic zooms or pans.
+- Animate every character and visible subject on the page (all panels/foreground/background figures). No one should remain completely static.
+- Camera: locked. No zoom, pan, tilt, parallax, or scrolling. Keep the full page in frame at all times. Do not crop or move between panels. Do not add new pages.
 - Effects are optional and must stay minimal:
   - If the page suggests it, add ONE: soft smoke wisps OR light rain (very subtle).
   - If a power-up/aura is present, add a faint glow.
@@ -116,6 +122,102 @@ function buildDownloadUrl(req, videoUrl) {
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   const encoded = encodeURIComponent(videoUrl);
   return `${baseUrl}/api/veo/download?url=${encoded}`;
+}
+
+function extractGeminiText(result) {
+  const parts = result?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return '';
+  return parts.map(part => part?.text).filter(Boolean).join('\n').trim();
+}
+
+async function generateGeminiContent({ model, contents, generationConfig }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+  const body = {
+    contents,
+    ...(generationConfig ? { generationConfig } : {})
+  };
+  const response = await fetchWithRetry(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+  const result = response.json();
+  if (result.error) {
+    throw new Error(result.error.message || 'Gemini generateContent error');
+  }
+  return { result, text: extractGeminiText(result) };
+}
+
+async function buildPromptFromImage({ imageData, mimeType }) {
+  if (!VEO_USE_GEMINI3_PROMPT) {
+    return ANIMATION_PROMPT;
+  }
+  if (!imageData || !mimeType) {
+    return ANIMATION_PROMPT;
+  }
+
+  const analysisPrompt = [
+    'Analyze this manga page for animation.',
+    'Return a concise, factual summary focused on: characters, setting, actions, emotions, camera/framing, text notes, and any implied motion/effects.',
+    'Do not invent details that are not visible.'
+  ].join(' ');
+
+  const analysisContents = [
+    {
+      role: 'user',
+      parts: [
+        {
+          inlineData: {
+            mimeType,
+            data: imageData
+          }
+        },
+        { text: analysisPrompt }
+      ]
+    }
+  ];
+
+  const analysisConfig = GEMINI3_THINKING_LEVEL
+    ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } }
+    : undefined;
+
+  const analysis = await generateGeminiContent({
+    model: GEMINI3_ANALYSIS_MODEL,
+    contents: analysisContents,
+    generationConfig: analysisConfig
+  });
+
+  const promptBuilderInstruction = [
+    'You are writing a single prompt for a video generation model.',
+    'Use the analysis below to tailor the prompt to this exact manga page.',
+    'Keep the prompt concise and specific to visible details.',
+    'Follow these strict animation constraints:',
+    ANIMATION_PROMPT,
+    'Return only the final prompt text (no bullets, no JSON).',
+    'Analysis:',
+    analysis.text || '(no analysis)'
+  ].join('\n');
+
+  const promptContents = [
+    {
+      role: 'user',
+      parts: [{ text: promptBuilderInstruction }]
+    }
+  ];
+
+  const promptConfig = GEMINI3_THINKING_LEVEL
+    ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } }
+    : undefined;
+
+  const promptResult = await generateGeminiContent({
+    model: GEMINI3_PROMPT_MODEL,
+    contents: promptContents,
+    generationConfig: promptConfig
+  });
+
+  return promptResult.text || ANIMATION_PROMPT;
 }
 
 async function fetchWithRetry(url, options, maxRetries = 3) {
@@ -268,14 +370,6 @@ app.post('/api/veo', async (req, res) => {
     return res.status(500).json({ error: 'GEMINI_API_KEY not configured' });
   }
 
-  if (VEO_REQUIRE_IMAGE && VEO_PROVIDER !== 'vertex') {
-    return res.status(400).json({
-      error: 'Reference images require Vertex AI. Set VEO_PROVIDER=vertex and configure Vertex settings.',
-      details: 'Provide GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION, VERTEX_OUTPUT_GCS_URI and ADC credentials.',
-      status: 'failed'
-    });
-  }
-
   const queuedAt = Date.now();
   await acquireVeoSlot();
   const waitedMs = Date.now() - queuedAt;
@@ -290,6 +384,14 @@ app.post('/api/veo', async (req, res) => {
     const imageData = imageBase64
       ? (imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64)
       : null;
+    const effectiveMimeType = mimeType || 'image/jpeg';
+    const animationPrompt = await buildPromptFromImage({
+      imageData,
+      mimeType: effectiveMimeType
+    });
+    if (VEO_DEBUG_PROMPT) {
+      console.log('🧠 Gemini3 prompt:\n', animationPrompt);
+    }
 
     if (VEO_PROVIDER === 'vertex') {
       if (!GOOGLE_CLOUD_PROJECT) {
@@ -298,8 +400,6 @@ app.post('/api/veo', async (req, res) => {
       if (!VERTEX_OUTPUT_GCS_URI) {
         throw new Error('VERTEX_OUTPUT_GCS_URI not configured for Vertex AI');
       }
-      const effectiveMimeType = mimeType || 'image/jpeg';
-
       if (VEO_INCLUDE_IMAGE && (!imageData || !effectiveMimeType)) {
         throw new Error('Missing image data for Vertex AI request');
       }
@@ -318,7 +418,7 @@ app.post('/api/veo', async (req, res) => {
         throw new Error('Vertex AI endpoint not configured');
       }
 
-      const instance = { prompt: ANIMATION_PROMPT };
+      const instance = { prompt: animationPrompt };
       if (VEO_INCLUDE_IMAGE && imageData) {
         const ext = effectiveMimeType === 'image/png'
           ? 'png'
@@ -390,7 +490,13 @@ app.post('/api/veo', async (req, res) => {
         if (videoUrl) {
           const downloadUrl = buildDownloadUrl(req, videoUrl);
           console.log('✅ VIDEO READY:', videoUrl);
-          return res.json({ videoUrl, downloadUrl, status: 'ready', resolution });
+          return res.json({
+            videoUrl,
+            downloadUrl,
+            status: 'ready',
+            resolution,
+            ...(VEO_DEBUG_PROMPT ? { prompt: animationPrompt } : {})
+          });
         }
         const preview = JSON.stringify(result).slice(0, 1200);
         console.error('❌ Vertex response missing output URI:', preview);
@@ -405,16 +511,21 @@ app.post('/api/veo', async (req, res) => {
     console.log(`📤 Model: ${modelId}`);
     console.log(`📤 Calling: ${apiUrl.replace(GEMINI_API_KEY, 'KEY')}`);
 
-    const requestBody = buildVeoRequestBody({
-      prompt: ANIMATION_PROMPT,
+    const buildRequestBody = (imageMode) => buildVeoRequestBody({
+      prompt: animationPrompt,
       imageData,
-      mimeType,
+      mimeType: effectiveMimeType,
       aspectRatio,
       resolution,
       personGeneration: VEO_PERSON_GENERATION,
       numberOfVideos: VEO_NUMBER_OF_VIDEOS,
-      includeImage: VEO_INCLUDE_IMAGE
+      includeImage: VEO_INCLUDE_IMAGE,
+      imageMode
     });
+
+    let imageMode = VEO_GEMINI_IMAGE_MODE;
+    let requestBody = buildRequestBody(imageMode);
+    let triedAlternateImageMode = false;
 
     let generateResponse;
     try {
@@ -428,7 +539,47 @@ app.post('/api/veo', async (req, res) => {
     } catch (error) {
       const message = error?.message || String(error);
       const unsupportedField = getUnsupportedField(message);
-      if (unsupportedField && requestBody.parameters?.[unsupportedField] !== undefined) {
+      if (unsupportedField === 'referenceImages') {
+        if (VEO_REQUIRE_IMAGE) {
+          if (imageMode === 'reference' && !triedAlternateImageMode) {
+            triedAlternateImageMode = true;
+            imageMode = 'first_frame';
+            requestBody = buildRequestBody(imageMode);
+            console.warn('⚠️ referenceImages not supported. Retrying with first_frame image mode.');
+            generateResponse = await fetchWithRetry(apiUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(requestBody)
+            });
+          } else {
+            throw new Error('referenceImages is not supported by this model. Try VEO_GEMINI_IMAGE_MODE=first_frame.');
+          }
+        } else {
+          console.warn(`⚠️ Field not supported by model: ${unsupportedField}. Retrying without it.`);
+          delete requestBody.parameters.referenceImages;
+          generateResponse = await fetchWithRetry(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(requestBody)
+          });
+        }
+      } else if (unsupportedField === 'personGeneration') {
+        console.warn('⚠️ personGeneration not supported. Retrying without it.');
+        if (requestBody.parameters?.personGeneration !== undefined) {
+          delete requestBody.parameters.personGeneration;
+        }
+        generateResponse = await fetchWithRetry(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(requestBody)
+        });
+      } else if (unsupportedField && requestBody.parameters?.[unsupportedField] !== undefined) {
         console.warn(`⚠️ Field not supported by model: ${unsupportedField}. Retrying without it.`);
         delete requestBody.parameters[unsupportedField];
         generateResponse = await fetchWithRetry(apiUrl, {
@@ -438,19 +589,38 @@ app.post('/api/veo', async (req, res) => {
           },
           body: JSON.stringify(requestBody)
         });
-      } else if (isUnsupportedImageError(message) && requestBody.instances?.[0]?.image) {
-        if (!VEO_ALLOW_IMAGE_FALLBACK || VEO_REQUIRE_IMAGE) {
-          throw new Error('Image inputs are required but not supported by this provider. Use Vertex AI.');
+      } else if (isUnsupportedImageError(message) &&
+        (requestBody.instances?.[0]?.image || requestBody.parameters?.referenceImages?.length)) {
+        if (VEO_REQUIRE_IMAGE) {
+          if (!triedAlternateImageMode) {
+            triedAlternateImageMode = true;
+            imageMode = imageMode === 'reference' ? 'first_frame' : 'reference';
+            requestBody = buildRequestBody(imageMode);
+            console.warn(`⚠️ Image payload rejected. Retrying with image mode: ${imageMode}.`);
+            generateResponse = await fetchWithRetry(apiUrl, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify(requestBody)
+            });
+          } else {
+            throw new Error('Image inputs are required but the Gemini API rejected both image modes.');
+          }
+        } else if (!VEO_ALLOW_IMAGE_FALLBACK) {
+          throw new Error('Image inputs are required but the Gemini API rejected the image payload.');
+        } else {
+          console.warn('⚠️ Image inputs not supported by model. Retrying without image.');
+          if (requestBody.instances?.[0]?.image) delete requestBody.instances[0].image;
+          if (requestBody.parameters?.referenceImages) delete requestBody.parameters.referenceImages;
+          generateResponse = await fetchWithRetry(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(requestBody)
+          });
         }
-        console.warn('⚠️ Image inputs not supported by model. Retrying without image.');
-        delete requestBody.instances[0].image;
-        generateResponse = await fetchWithRetry(apiUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(requestBody)
-        });
       } else {
         throw error;
       }
@@ -470,7 +640,13 @@ app.post('/api/veo', async (req, res) => {
       if (videoUrl) {
         const downloadUrl = buildDownloadUrl(req, videoUrl);
         console.log('✅ VIDEO READY:', videoUrl);
-        return res.json({ videoUrl, downloadUrl, status: 'ready', resolution });
+        return res.json({
+          videoUrl,
+          downloadUrl,
+          status: 'ready',
+          resolution,
+          ...(VEO_DEBUG_PROMPT ? { prompt: animationPrompt } : {})
+        });
       }
       throw new Error('Video generation completed but output URI not found');
     }
@@ -489,7 +665,7 @@ app.post('/api/veo', async (req, res) => {
       console.error('❌ Final error:', message);
       return res.status(400).json({
         error: 'This Veo model does not accept image inputs via the Gemini API.',
-        details: 'Use a Vertex AI image-to-video workflow or set VEO_INCLUDE_IMAGE=false for prompt-only testing.',
+        details: 'Try VEO_GEMINI_IMAGE_MODE=reference or first_frame. If both fail, use Vertex or Gemini Files API.',
         status: 'failed'
       });
     }
@@ -605,6 +781,10 @@ app.get('/health', (_req, res) => {
     requireImage: VEO_REQUIRE_IMAGE,
     maxConcurrent: VEO_MAX_CONCURRENT,
     provider: VEO_PROVIDER,
+    gemini3Prompt: VEO_USE_GEMINI3_PROMPT,
+    debugPrompt: VEO_DEBUG_PROMPT,
+    gemini3AnalysisModel: GEMINI3_ANALYSIS_MODEL,
+    gemini3PromptModel: GEMINI3_PROMPT_MODEL,
     vertexLocation: VERTEX_LOCATION,
     vertexModel: VERTEX_MODEL,
     vertexOutputGcs: VERTEX_OUTPUT_GCS_URI ? 'set' : 'not_set'
