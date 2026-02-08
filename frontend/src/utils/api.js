@@ -1,18 +1,20 @@
 const API_BASE = import.meta.env.PROD ? '/api' : 'http://localhost:3001/api';
 
 export async function generateVideo(imageBase64, mimeType, aspectRatio, options = {}) {
-  const { model = 'default', resolution = '1080p' } = options;
+  const { model = 'default', resolution = '1080p', userPrompt, signal } = options;
   
   try {
     const response = await fetch(`${API_BASE}/veo`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      ...(signal ? { signal } : {}),
       body: JSON.stringify({
         imageBase64,
         mimeType,
         aspectRatio,
         model,
-        resolution
+        resolution,
+        ...(userPrompt ? { userPrompt } : {})
       })
     });
     

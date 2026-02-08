@@ -57,6 +57,22 @@ export function useVideoCache() {
     }
   }, [ensureDb]);
 
+  const getAllVideos = useCallback(async () => {
+    try {
+      const db = await ensureDb();
+      const keys = await db.getAllKeys(STORE_NAME);
+      const values = await Promise.all(keys.map(key => db.get(STORE_NAME, key)));
+      return keys.map((key, index) => ({
+        key,
+        blob: values[index]?.blob || null,
+        timestamp: values[index]?.timestamp || null
+      })).filter(entry => entry.blob);
+    } catch (error) {
+      console.error('Failed to read cached videos:', error);
+      return [];
+    }
+  }, [ensureDb]);
+
   const clearCache = useCallback(async () => {
     try {
       const db = await ensureDb();
@@ -66,5 +82,5 @@ export function useVideoCache() {
     }
   }, [ensureDb]);
 
-  return { getVideo, setVideo, clearCache };
+  return { getVideo, setVideo, getAllVideos, clearCache };
 }

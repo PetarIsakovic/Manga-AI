@@ -33,12 +33,16 @@ const VEO_ALLOW_IMAGE_FALLBACK = process.env.VEO_ALLOW_IMAGE_FALLBACK === 'true'
 const VEO_GEMINI_IMAGE_MODE = (process.env.VEO_GEMINI_IMAGE_MODE || 'first_frame').toLowerCase();
 const VEO_USE_GEMINI3_PROMPT = process.env.VEO_USE_GEMINI3_PROMPT === 'true';
 const VEO_DEBUG_PROMPT = process.env.VEO_DEBUG_PROMPT === 'true';
+const VEO_DURATION_SECONDS = Number.isInteger(parseInt(process.env.VEO_DURATION_SECONDS, 10))
+  ? Math.max(1, Math.min(8, parseInt(process.env.VEO_DURATION_SECONDS, 10)))
+  : 4;
 const GEMINI3_ANALYSIS_MODEL = process.env.GEMINI3_ANALYSIS_MODEL || 'gemini-3-flash-preview';
 const GEMINI3_PROMPT_MODEL = process.env.GEMINI3_PROMPT_MODEL || GEMINI3_ANALYSIS_MODEL;
 const GEMINI3_THINKING_LEVEL = process.env.GEMINI3_THINKING_LEVEL;
 const VEO_MAX_CONCURRENT = Number.isInteger(parseInt(process.env.VEO_MAX_CONCURRENT, 10))
   ? parseInt(process.env.VEO_MAX_CONCURRENT, 10)
   : 1;
+const VEO_MINIMAL_PROMPT = process.env.VEO_MINIMAL_PROMPT !== 'false';
 const VEO_NUMBER_OF_VIDEOS = Number.isInteger(parseInt(process.env.VEO_NUMBER_OF_VIDEOS, 10))
   ? parseInt(process.env.VEO_NUMBER_OF_VIDEOS, 10)
   : undefined;
@@ -49,39 +53,31 @@ const VERTEX_OUTPUT_GCS_URI = process.env.VERTEX_OUTPUT_GCS_URI;
 const PORT = process.env.PORT || 3001;
 
 const BASE_CONSTRAINTS_TEXT = [
-  'Use the provided comic page as a completely fixed, stationary frame.',
-  'The frame itself must NOT move, slide, pan, zoom, tilt, or shift in any direction.',
-  'All panels, borders, gutters, line art, and text must remain in their exact positions.',
-  'This is character animation within a fixed comic page, not camera movement.',
-  'Animate individual characters and elements WITHIN the frame only.',
-  'The background and panel borders are locked in place - they must NOT move.',
-  'No camera movement. No scene cuts. No parallax. No frame motion.'
+  'Keep the entire page fixed and fully visible.',
+  'No camera motion, zoom, crop, pan, tilt, or drift.',
+  'Panels, borders, gutters, and text are locked.',
+  'Animate only within panels.'
 ].join(' ');
 const STYLE_PRESERVATION_TEXT = [
-  'Preserve the original line thickness, ink texture, and flat coloring.',
-  'No painterly shading, no gradients, no smoothing.',
-  'Line art must remain identical to the source image.',
-  'Color palette must remain unchanged.',
-  'Treat the image as scanned comic paper.'
+  'Preserve original line art, ink texture, and flat colors.',
+  'No stylization, gradients, smoothing, or extra effects.',
+  'No new elements.'
 ].join(' ');
 const PANEL_LOCK_TEXT = [
-  'Each panel must be treated independently.',
-  'Panel borders are absolute and cannot be crossed.',
-  'No visual blending between panels.'
+  'Panel borders are absolute.',
+  'No crossing or blending between panels.'
 ].join(' ');
 const FORBIDDEN_CHANGES_TEXT = [
-  'Do NOT change overall pose, perspective, layout, or text.',
-  'Do NOT add new visual elements or redraw anything.',
-  'Do NOT move the frame, slide the panel, or create camera motion.',
-  'Characters can move naturally (breathing, blinking, hair sway, cloth movement, gesture completion).',
-  'Lighting must remain exactly as drawn.',
-  'Forbidden: frame sliding, camera pan, style enhancement, anime video redraw, cinematic effects, depth of field changes.'
+  'Do not change layout, perspective, poses, or text.',
+  'No global motion or stabilization.',
+  'No reframing.'
 ].join(' ');
 const VIDEO_SETTINGS_TEXT = [
-  'Duration: 4 seconds.',
-  'Completely stable, locked framing - the frame must NOT move.',
-  'Motion intensity: natural character animation, clearly visible but not exaggerated.',
-  'Focus animation on character actions: breathing, blinking, hair movement, cloth rustling, limb gestures.'
+  `Duration: ${VEO_DURATION_SECONDS} seconds.`,
+  'Motion should be strong, clearly visible, and continuous while poses stay fixed.',
+  'Use pronounced breathing, blinking, eye shifts, and hair/cloth motion.',
+  'Include looping motion in existing background details (still subtle in size, but visible).',
+  'No extra effects. No audio.'
 ].join(' ');
 
 const ANIMATION_PROMPT = `BASE CONSTRAINTS:\n${BASE_CONSTRAINTS_TEXT}\n\nSTYLE & ART PRESERVATION:\n${STYLE_PRESERVATION_TEXT}\n\nPANEL LOCK:\n${PANEL_LOCK_TEXT}\n\nFORBIDDEN CHANGES:\n${FORBIDDEN_CHANGES_TEXT}\n\nVIDEO SETTINGS:\n${VIDEO_SETTINGS_TEXT}`;
@@ -147,82 +143,189 @@ function buildDownloadUrl(req, videoUrl) {
   return `${baseUrl}/api/veo/download?url=${encoded}`;
 }
 
+function getRaiFilterInfo(result) {
+  if (!result || typeof result !== 'object') return null;
+  const count =
+    result.raiMediaFilteredCount ??
+    result.generateVideoResponse?.raiMediaFilteredCount ??
+    result.predictions?.[0]?.raiMediaFilteredCount ??
+    null;
+  const reasons =
+    result.raiMediaFilteredReasons ??
+    result.generateVideoResponse?.raiMediaFilteredReasons ??
+    result.predictions?.[0]?.raiMediaFilteredReasons ??
+    null;
+  if ((typeof count === 'number' && count > 0) || (Array.isArray(reasons) && reasons.length > 0)) {
+    return { count: typeof count === 'number' ? count : reasons?.length || 1, reasons: reasons || [] };
+  }
+  return null;
+}
+
 function sanitizePrompt(text = '') {
   let output = text;
   const replacements = [
-    // // Franchise/character names - remove entirely
-    // [/chainsaw\s*man/gi, 'illustrated character'],
-    // [/jujutsu\s*kaisen/gi, 'illustrated scene'],
-    // [/demon\s*slayer/gi, 'illustrated scene'],
-    // [/one\s*piece/gi, 'illustrated scene'],
-    // [/naruto/gi, 'the character'],
-    // [/goku/gi, 'the character'],
-    // [/denji/gi, 'the character'],
-    // [/pochita/gi, 'the creature'],
-    // [/gojo/gi, 'the character'],
-    // [/sukuna/gi, 'the character'],
-    // [/itadori/gi, 'the character'],
-    // [/manga/gi, 'illustrated art'],
-    // [/anime/gi, 'animated art'],
-    // // Weapons - neutralize
-    // [/chainsaw/gi, ''],
-    // [/\bsaw\b/gi, ''],
-    // [/blade(s)?/gi, ''],
-    // [/sword(s)?/gi, ''],
-    // [/knife|knives/gi, ''],
-    // [/weapon(s)?/gi, ''],
-    // [/gun(s)?/gi, ''],
-    // [/spear(s)?/gi, ''],
-    // [/axe(s)?/gi, ''],
-    // // Violence words - replace with artistic/motion terms
-    // [/fight(?:ing|s)?/gi, 'dynamic motion'],
-    // [/fought/gi, 'moved dynamically'],
-    // [/attack(?:ing|ed|s)?/gi, 'swift motion'],
-    // [/punch(?:ing|ed|es)?/gi, 'arm extension'],
-    // [/kick(?:ing|ed|s)?/gi, 'leg motion'],
-    // [/hit(?:ting|s)?/gi, 'motion'],
-    // [/strike|struck|striking/gi, 'swift gesture'],
-    // [/slash(?:ing|ed|es)?/gi, 'sweeping motion'],
-    // [/stab(?:bing|bed|s)?/gi, 'forward motion'],
-    // [/battle/gi, 'dynamic scene'],
-    // [/combat/gi, 'dynamic movement'],
-    // [/violen(?:t|ce)/gi, 'intense'],
-    // [/\bwar\b/gi, 'confrontation'],
-    // // Harm/death words - remove
-    // [/kill(?:ing|ed|s|er)?/gi, ''],
-    // [/murder(?:ed|ing|er)?/gi, ''],
-    // [/death|dead|dying|die/gi, ''],
-    // [/blood(?:y)?/gi, ''],
-    // [/bleed(?:ing)?/gi, ''],
-    // [/gore|gory/gi, ''],
-    // [/wound(?:ed|s)?/gi, ''],
-    // [/injur(?:e|ed|y|ies)/gi, ''],
-    // [/hurt(?:ing)?/gi, ''],
-    // [/pain(?:ful)?/gi, 'intensity'],
-    // [/dismember|decapitat(?:e|ed|ion)?|sever(?:ed)?/gi, ''],
-    // [/explod(?:e|ed|ing)|explosion/gi, 'burst of energy'],
-    // [/destroy(?:ed|ing)?|destruct(?:ion)?/gi, 'dramatic effect'],
-    // // Body parts that might trigger filters
-    // [/fist(s)?/gi, 'hand'],
-    // [/clenched\s*fist/gi, 'tense hand'],
-    // // Other
-    // [/dog/gi, 'creature'],
-    // [/barking/gi, 'calling'],
-    // [/teeth/gi, 'expression'],
-    // [/toothy/gi, 'wide'],
-    // [/demon(s)?/gi, 'character'],
-    // [/cursed/gi, 'mystical'],
-    // [/curse(s)?/gi, 'energy']
+    // Neutralize brand/IP and sensitive descriptors
+    [/chainsaw\s*man/gi, 'illustrated character'],
+    [/denji|kishibe|quanxi|pochita|poccontacta/gi, 'character'],
+    [/\bchild(?:ren)?\b/gi, 'person'],
+    [/\bkid(?:s)?\b/gi, 'person'],
+    [/\bteen(?:ager|s)?\b/gi, 'person'],
+    [/\bminor(?:s)?\b/gi, 'person'],
+    [/\byouth(?:s)?\b/gi, 'person'],
+    [/\byoung\b/gi, ''],
+    [/\bboy(?:s)?\b/gi, 'person'],
+    [/\bgirl(?:s)?\b/gi, 'person'],
+    [/\bman\b/gi, 'person'],
+    [/\bwoman\b/gi, 'person'],
+    [/\bolder\b/gi, ''],
+    [/chainsaw/gi, 'mechanical tool'],
+    [/chain\s*saw/gi, 'mechanical tool'],
+    [/blade(s)?/gi, 'edge'],
+    [/\bsaw\b/gi, 'tool'],
+    [/serrated/gi, 'mechanical'],
+    [/jagged/gi, 'angular'],
+    [/spiked?|spiky/gi, 'angular'],
+    [/\blip(?:s)?\b/gi, 'face'],
+    [/\bmouth(?:s)?\b/gi, 'face'],
+    [/\btongue\b/gi, 'detail'],
+    // Violence / harm terms
+    [/kill(?:ing|ed|s|er)?/gi, ''],
+    [/murder(?:ed|ing|er)?/gi, ''],
+    [/death|dead|dying|die/gi, ''],
+    [/corpse|guts?|viscera/gi, ''],
+    [/blood(?:y)?/gi, ''],
+    [/bleed(?:ing)?/gi, ''],
+    [/gore|gory/gi, ''],
+    [/wound(?:ed|s)?/gi, ''],
+    [/injur(?:e|ed|y|ies)/gi, ''],
+    [/hurt(?:ing)?/gi, ''],
+    [/pain(?:ful|fully)?|agony|suffer(?:ing)?/gi, ''],
+    [/victim(s)?/gi, 'figure'],
+    [/attack(?:ing|ed|s)?/gi, 'dynamic motion'],
+    [/fight(?:ing|s)?/gi, 'dynamic motion'],
+    [/battle/gi, 'dynamic scene'],
+    [/combat/gi, 'dynamic movement'],
+    [/strike(?:s|ing)?|hit(?:ting|s)?|slam(?:med|ming)?|smash(?:ed|ing)?/gi, 'contact'],
+    [/stomp(?:ed|ing)?|crush(?:ed|ing)?/gi, 'press'],
+    [/cut(?:ting)?|slice(?:d|s|ing)?|slash(?:ed|ing)?|stab(?:bed|bing)?|pierc(?:e|ed|ing)|impal(?:e|ed|ing)/gi, ''],
+    // Weapons
+    [/weapon(s)?/gi, 'prop'],
+    [/gun(s)?/gi, 'prop'],
+    [/knife|knives/gi, 'prop'],
+    [/sword(s)?/gi, 'prop'],
+    [/axe(s)?/gi, 'prop'],
+    [/spear(s)?/gi, 'prop'],
+    // Fluids / splatter
+    [/splatter(?:s|ed|ing)?/gi, 'drift'],
+    [/splash(?:es|ed|ing)?/gi, 'drift'],
+    [/fluid/gi, 'liquid'],
+    [/droplet(s)?/gi, 'small particles'],
+    [/liquid/gi, 'color wash'],
+    [/ooz(?:e|ing)?/gi, 'slow shift'],
+    [/drip(?:ping|s)?/gi, 'slow shift'],
+    [/simmer(?:ing)?/gi, 'soft pulse'],
+    [/gasp(?:ing)?/gi, 'slow breathing'],
+    [/collapsed|fallen|defeated|suppressed|crushing/gi, 'resting'],
+    [/pile|heap/gi, 'group'],
+    [/\bboot\b/gi, 'foot'],
+    [/debris|fragments?/gi, 'particles'],
+    [/dust|ash/gi, 'grain'],
+    [/explod(?:e|ed|ing)|explosion/gi, 'glow pulse'],
+    // Teeth wording
+    [/maw|fang(s)?|jaw/gi, 'smile'],
+    [/teeth/gi, 'smile'],
+    [/toothy/gi, 'wide']
   ];
 
   for (const [pattern, replacement] of replacements) {
     output = output.replace(pattern, replacement);
   }
 
+  output = output.replace(/background:\s*completely static[^\\n]*/gi, 'Panel/Props: subtle ambient motion of existing details');
   output = output.replace(/\s{2,}/g, ' ').trim();
   return output;
 }
 
+function compactPrompt(text = '', maxLines = 4, maxChars = 280) {
+  const lines = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(0, maxLines);
+  let output = lines.join('\n');
+  if (output.length > maxChars) {
+    output = output.slice(0, maxChars).trim();
+  }
+  return output;
+}
+
+function stripSensitiveLines(text = '') {
+  const blocked = [
+    /underfoot|under foot/gi,
+    /\bpress(?:ed|ure|ing)?\b/gi,
+    /\bcompress(?:ed|ion|ing)?\b/gi,
+    /\bcrush(?:ed|ing)?\b/gi,
+    /\bstomp(?:ed|ing)?\b/gi,
+    /\bsmash(?:ed|ing)?\b/gi,
+    /\bimpact\b/gi,
+    /\blunge\b/gi,
+    /\bstrike(?:s|ing)?\b/gi,
+    /\bhit(?:s|ting)?\b/gi,
+    /\bwound(?:ed|s)?\b/gi,
+    /\binjur(?:e|ed|y|ies)\b/gi,
+    /\bdefeat(?:ed|ing)?\b/gi,
+    /\bdead|death|die|dying\b/gi,
+    /\bblood|gore|gory\b/gi,
+    /\bmoan|roar|bark|scream|panic\b/gi,
+    /\bkill|attack|fight|battle|combat\b/gi,
+    /\bweapon|knife|gun|sword|axe|spear\b/gi,
+    /\bblade|chainsaw|chain\s*saw\b/gi
+    ,/\bchild(?:ren)?\b/gi
+    ,/\bkid(?:s)?\b/gi
+    ,/\bteen(?:ager|s)?\b/gi
+    ,/\bminor(?:s)?\b/gi
+    ,/\byouth(?:s)?\b/gi
+    ,/\byoung\b/gi
+    ,/\bboy(?:s)?\b/gi
+    ,/\bgirl(?:s)?\b/gi
+    ,/\bman\b/gi
+    ,/\bwoman\b/gi
+    ,/\bolder\b/gi
+  ];
+  const lines = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => !blocked.some(pattern => pattern.test(line)));
+  return lines.join('\n').trim();
+}
+
+function buildMinimalPrompt(userPrompt = '') {
+  const base = [
+    'All visible figures: strong breathing, frequent blinking, eye shifts, and small head/hand motion; hair and cloth sway continuously.',
+    'Props/background: existing details shimmer or drift in looping motion (text/lines can pulse slightly).',
+    'Loop each motion 2-3 times across the clip. Frame locked. Preserve line art and colors. No new elements.'
+  ];
+  const cleaned = userPrompt ? sanitizePrompt(userPrompt) : '';
+  const safeUser = cleaned ? stripSensitiveLines(cleaned) : '';
+  if (safeUser) {
+    base.push(`USER: ${safeUser.slice(0, 100)}`);
+  }
+  return base.join('\n');
+}
+
+function buildUltraShortPrompt(userPrompt = '') {
+  const base = [
+    'Animate all visible figures with strong breathing, frequent blinking, eye shifts, and hair/cloth motion.',
+    'Animate existing props/background with looping shimmer or drift only.',
+    'Keep framing and layout locked. No camera motion. No new elements.'
+  ];
+  const cleaned = userPrompt ? sanitizePrompt(userPrompt).slice(0, 120) : '';
+  if (cleaned) {
+    base.push(`USER DIRECTION: ${cleaned}`);
+  }
+  return base.join('\n');
+}
 function extractGeminiText(result) {
   const parts = result?.candidates?.[0]?.content?.parts;
   if (!Array.isArray(parts)) return '';
@@ -249,39 +352,81 @@ async function generateGeminiContent({ model, contents, generationConfig }) {
   return { result, text: extractGeminiText(result) };
 }
 
-async function buildPromptFromImage({ imageData, mimeType }) {
+async function listGeminiModels() {
+  if (!GEMINI_API_KEY) {
+    return { models: [] };
+  }
+  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`;
+  const response = await fetchWithRetry(url, { method: 'GET' });
+  const data = response.json();
+  return data || { models: [] };
+}
+
+async function buildPromptFromImage({ imageData, mimeType, userPrompt }) {
+  const cleanedUserPrompt = userPrompt && typeof userPrompt === 'string'
+    ? sanitizePrompt(userPrompt).slice(0, 500)
+    : '';
+  if (VEO_MINIMAL_PROMPT) {
+    if (VEO_USE_GEMINI3_PROMPT && imageData && mimeType) {
+      try {
+        const analysisPrompt = 'List up to 3 visible subjects or details to animate. Use neutral words only.';
+        const analysisContents = [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { mimeType, data: imageData } },
+              { text: analysisPrompt }
+            ]
+          }
+        ];
+        const analysisConfig = GEMINI3_THINKING_LEVEL
+          ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } }
+          : undefined;
+        const analysis = await generateGeminiContent({
+          model: GEMINI3_ANALYSIS_MODEL,
+          contents: analysisContents,
+          generationConfig: analysisConfig
+        });
+        let cleanedAnalysis = sanitizePrompt(analysis.text || '');
+        cleanedAnalysis = cleanedAnalysis.replace(/^based on[^:]*:\s*/i, '');
+        cleanedAnalysis = cleanedAnalysis.replace(/^here are[^:]*:\s*/i, '');
+        cleanedAnalysis = compactPrompt(
+          stripSensitiveLines(cleanedAnalysis),
+          2,
+          240
+        );
+        if (cleanedAnalysis) {
+          return `${ANIMATION_PROMPT}\n\n${buildMinimalPrompt(cleanedUserPrompt)}\nFocus: ${cleanedAnalysis}`;
+        }
+      } catch (error) {
+        console.warn('⚠️ Gemini analysis (minimal) failed, using minimal prompt only.');
+      }
+    }
+    return `${ANIMATION_PROMPT}\n\n${buildMinimalPrompt(cleanedUserPrompt)}`;
+  }
+
   if (!VEO_USE_GEMINI3_PROMPT) {
-    return ANIMATION_PROMPT;
+    if (!userPrompt || typeof userPrompt !== 'string') {
+      return ANIMATION_PROMPT;
+    }
+    if (!cleanedUserPrompt) {
+      return ANIMATION_PROMPT;
+    }
+    return `${ANIMATION_PROMPT}\n\nUSER DIRECTION (must comply with constraints):\n${cleanedUserPrompt}`;
   }
   if (!imageData || !mimeType) {
-    return ANIMATION_PROMPT;
+    if (!userPrompt || typeof userPrompt !== 'string') {
+      return ANIMATION_PROMPT;
+    }
+    if (!cleanedUserPrompt) {
+      return ANIMATION_PROMPT;
+    }
+    return `${ANIMATION_PROMPT}\n\nUSER DIRECTION (must comply with constraints):\n${cleanedUserPrompt}`;
   }
 
   const analysisPrompt = [
-    'Analyze this manga/comic panel to identify characters and their current poses/actions.',
-    'This is for creating SUBTLE ANIMATIONS that bring the EXISTING ART to life.',
-    '',
-    '=== CRITICAL: PRESERVE THE ORIGINAL ART ===',
-    'The manga panel must stay EXACTLY as drawn. Do NOT change, redraw, or alter the artwork.',
-    'Only describe small, natural movements that enhance what is ALREADY shown.',
-    '',
-    'For EACH character visible, describe:',
-    '1. POSITION: Where in the panel? (left, center, right, foreground, background)',
-    '2. CURRENT POSE: Describe their exact pose as drawn (arm positions, leg positions, body angle)',
-    '3. EXPRESSION: What emotion is shown on their face?',
-    '4. SUGGESTED MICRO-ANIMATIONS (small movements that fit their pose):',
-    '   - If in dynamic pose: subtle muscle tension, slight tremor, energy buildup',
-    '   - If in motion pose: hair/clothing trails the motion direction, limbs show follow-through',
-    '   - If standing/idle: gentle breathing, slight sway, blinking, hair drift',
-    '   - If emotional: facial micro-expressions, breathing changes, subtle body language',
-    '5. SECONDARY ELEMENTS: Hair, clothing, accessories that would naturally move',
-    '',
-    'RULES:',
-    '- Describe ONLY what is visible in the image - do not invent new elements',
-    '- Animations must be SUBTLE and NATURAL - not dramatic changes',
-    '- The character\'s appearance, design, and pose must remain UNCHANGED',
-    '- Do NOT mention any franchise, series, or character names',
-    '- Describe poses artistically (athletic stance, dynamic gesture, reaching motion)'
+    'List visible characters and one or two clearly visible motions each, plus one background/prop motion. Be very brief.',
+    ...(cleanedUserPrompt ? [`USER DIRECTION: ${cleanedUserPrompt}`] : [])
   ].join('\n');
 
   const analysisContents = [
@@ -303,59 +448,25 @@ async function buildPromptFromImage({ imageData, mimeType }) {
     ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } }
     : undefined;
 
-  const analysis = await generateGeminiContent({
-    model: GEMINI3_ANALYSIS_MODEL,
-    contents: analysisContents,
-    generationConfig: analysisConfig
-  });
+  let analysis;
+  try {
+    analysis = await generateGeminiContent({
+      model: GEMINI3_ANALYSIS_MODEL,
+      contents: analysisContents,
+      generationConfig: analysisConfig
+    });
+  } catch (error) {
+    console.warn('⚠️ Gemini analysis failed, using ultra-short prompt fallback.');
+    return `${ANIMATION_PROMPT}\n\n${buildUltraShortPrompt(cleanedUserPrompt)}`;
+  }
 
   const promptBuilderInstruction = [
-    'Create animation instructions for a manga panel. The goal is to add LIFE to the existing artwork.',
-    '',
-    '=== ABSOLUTE REQUIREMENT: PRESERVE THE ORIGINAL ART ===',
-    'The manga artwork must remain EXACTLY as drawn:',
-    '- Same character designs, proportions, and line art',
-    '- Same poses, positions, and compositions',
-    '- Same colors, shading, and art style',
-    '- Same panel layout and borders',
-    '',
-    '=== WHAT TO ANIMATE ===',
-    'Add SUBTLE, NATURAL micro-movements that enhance the existing poses:',
-    '',
-    'FOR DYNAMIC POSES (characters in athletic/action stances):',
-    '- Subtle muscle tension and release',
-    '- Hair and clothing responding to implied motion',
-    '- Slight trembling from exerted energy',
-    '- Eyes tracking or intensity shifts',
-    '- Breathing that matches their effort level',
-    '',
-    'FOR EXPRESSIVE POSES (characters showing emotion):',
-    '- Subtle facial shifts (eye movement, brow tension, mouth adjustments)',
-    '- Chest rising/falling with breathing',
-    '- Small shoulder or hand movements',
-    '- Hair responding to any head movement',
-    '',
-    'FOR IDLE/STANDING POSES:',
-    '- Gentle breathing animation',
-    '- Soft blinking',
-    '- Slight natural sway',
-    '- Hair drifting gently',
-    '- Clothing settling',
-    '',
-    '=== OUTPUT FORMAT ===',
-    'Character (position): [Pose type] - [Micro-animations: specific subtle movements] | [Hair/clothing: physics] | [Face: expression shifts]',
-    'Background: COMPLETELY STATIC (no movement)',
-    '',
-    '=== FORBIDDEN ===',
-    '- DO NOT change character appearance or design',
-    '- DO NOT add new elements not in the original',
-    '- DO NOT move the camera, frame, or panel',
-    '- DO NOT redraw or alter the art style',
-    '- DO NOT use words: violent, fight, attack, punch, kick, hit, strike, battle, combat, weapon, blood, kill, death',
-    '- Instead use: dynamic pose, athletic stance, energetic gesture, reaching motion, swift movement',
-    '',
+    'Write 3-4 short lines total. No headings.',
+    'Each line: character/prop + 1-2 visible motions. Neutral words only.',
+    'Preserve art exactly. No camera motion. No new elements.',
+    ...(cleanedUserPrompt ? [`USER DIRECTION: ${cleanedUserPrompt}`] : []),
     'Reference analysis:',
-    analysis.text || '(no analysis)'
+    sanitizePrompt(analysis.text || '')
   ].join('\n');
 
   const promptContents = [
@@ -369,18 +480,24 @@ async function buildPromptFromImage({ imageData, mimeType }) {
     ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } }
     : undefined;
 
-  const promptResult = await generateGeminiContent({
-    model: GEMINI3_PROMPT_MODEL,
-    contents: promptContents,
-    generationConfig: promptConfig
-  });
+  let promptResult;
+  try {
+    promptResult = await generateGeminiContent({
+      model: GEMINI3_PROMPT_MODEL,
+      contents: promptContents,
+      generationConfig: promptConfig
+    });
+  } catch (error) {
+    console.warn('⚠️ Gemini prompt build failed, using ultra-short prompt fallback.');
+    return `${ANIMATION_PROMPT}\n\n${buildUltraShortPrompt(cleanedUserPrompt)}`;
+  }
 
   const rawPrompt = promptResult.text || '';
   const sanitized = sanitizePrompt(rawPrompt);
-  if (!sanitized) {
-    return ANIMATION_PROMPT;
-  }
-  return `${ANIMATION_PROMPT}\n\n${sanitized}`;
+  const stripped = stripSensitiveLines(sanitized);
+  const shortened = compactPrompt(stripped || sanitized, 4, 280);
+  const finalLines = shortened || buildUltraShortPrompt(cleanedUserPrompt);
+  return `${ANIMATION_PROMPT}\n\n${finalLines}`;
 }
 
 async function fetchWithRetry(url, options, maxRetries = 3) {
@@ -519,7 +636,7 @@ function releaseVeoSlot() {
 app.post('/api/veo', async (req, res) => {
   console.log('\n🎬 === VEO VIDEO GENERATION REQUEST ===');
 
-  const { imageBase64, mimeType, aspectRatio, model, resolution } = req.body;
+  const { imageBase64, mimeType, aspectRatio, model, resolution, userPrompt } = req.body;
 
   if (VEO_REQUIRE_IMAGE && !VEO_INCLUDE_IMAGE) {
     return res.status(400).json({ error: 'VEO_INCLUDE_IMAGE must be true when VEO_REQUIRE_IMAGE is enabled.' });
@@ -550,7 +667,8 @@ app.post('/api/veo', async (req, res) => {
     const effectiveMimeType = mimeType || 'image/jpeg';
     const animationPrompt = await buildPromptFromImage({
       imageData,
-      mimeType: effectiveMimeType
+      mimeType: effectiveMimeType,
+      userPrompt
     });
     if (VEO_DEBUG_PROMPT) {
       console.log('🧠 Gemini3 prompt:\n', animationPrompt);
@@ -614,61 +732,80 @@ app.post('/api/veo', async (req, res) => {
       const parameters = {
         storageUri,
         sampleCount: 1,
-        durationSeconds: 4,
+        durationSeconds: VEO_DURATION_SECONDS,
         ...(aspectRatio ? { aspectRatio: aspectRatio === '9:16' ? '9:16' : '16:9' } : {}),
         ...(resolution ? { resolution } : {})
       };
 
-      const vertexBody = {
-        instances: [instance],
-        parameters
+      const imageRef = instance.image ? { ...instance.image } : null;
+
+      const callVertex = async (promptToUse) => {
+        const vertexBody = {
+          instances: [
+            {
+              prompt: promptToUse,
+              ...(imageRef ? { image: imageRef } : {})
+            }
+          ],
+          parameters
+        };
+
+        console.log(`📤 Vertex model: ${VERTEX_MODEL}`);
+        console.log(`📤 Vertex call: ${vertexUrl}`);
+
+        const token = await getAccessToken();
+        const vertexResp = await fetch(vertexUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json; charset=utf-8'
+          },
+          body: JSON.stringify(vertexBody)
+        });
+
+        const vertexText = await vertexResp.text();
+        if (!vertexResp.ok) {
+          throw new Error(`Vertex API error ${vertexResp.status}: ${vertexText.substring(0, 200)}`);
+        }
+
+        const vertexResult = JSON.parse(vertexText);
+        if (vertexResult.error) {
+          console.error('❌ Vertex API Error:', JSON.stringify(vertexResult.error, null, 2));
+          throw new Error(vertexResult.error.message);
+        }
+
+        if (vertexResult.name) {
+          console.log(`⏳ Vertex operation started: ${vertexResult.name}`);
+          const result = await pollVertexOperation(vertexResult.name);
+          const videoUrl = extractVideoUrl(result);
+          return { videoUrl, result };
+        }
+
+        throw new Error(`Unexpected Vertex response: ${vertexText.substring(0, 300)}`);
       };
 
-      console.log(`📤 Vertex model: ${VERTEX_MODEL}`);
-      console.log(`📤 Vertex call: ${vertexUrl}`);
-
-      const token = await getAccessToken();
-      const vertexResp = await fetch(vertexUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json; charset=utf-8'
-        },
-        body: JSON.stringify(vertexBody)
-      });
-
-      const vertexText = await vertexResp.text();
-      if (!vertexResp.ok) {
-        throw new Error(`Vertex API error ${vertexResp.status}: ${vertexText.substring(0, 200)}`);
+      const initial = await callVertex(animationPrompt);
+      if (initial.videoUrl) {
+        const downloadUrl = buildDownloadUrl(req, initial.videoUrl);
+        console.log('✅ VIDEO READY:', initial.videoUrl);
+        return res.json({
+          videoUrl: initial.videoUrl,
+          downloadUrl,
+          status: 'ready',
+          resolution,
+          ...(VEO_DEBUG_PROMPT ? { prompt: animationPrompt } : {})
+        });
       }
 
-      const vertexResult = JSON.parse(vertexText);
-      if (vertexResult.error) {
-        console.error('❌ Vertex API Error:', JSON.stringify(vertexResult.error, null, 2));
-        throw new Error(vertexResult.error.message);
+      const raiInfo = getRaiFilterInfo(initial.result);
+      if (raiInfo) {
+        console.warn('⚠️ Vertex RAI filter triggered. No retry (per request).');
+        throw new Error('Vertex safety filter blocked the prompt. Try rephrasing to be more neutral.');
       }
 
-      if (vertexResult.name) {
-        console.log(`⏳ Vertex operation started: ${vertexResult.name}`);
-        const result = await pollVertexOperation(vertexResult.name);
-        const videoUrl = extractVideoUrl(result);
-        if (videoUrl) {
-          const downloadUrl = buildDownloadUrl(req, videoUrl);
-          console.log('✅ VIDEO READY:', videoUrl);
-          return res.json({
-            videoUrl,
-            downloadUrl,
-            status: 'ready',
-            resolution,
-            ...(VEO_DEBUG_PROMPT ? { prompt: animationPrompt } : {})
-          });
-        }
-        const preview = JSON.stringify(result).slice(0, 1200);
-        console.error('❌ Vertex response missing output URI:', preview);
-        throw new Error('Vertex video generation completed but output URI not found');
-      }
-
-      throw new Error(`Unexpected Vertex response: ${vertexText.substring(0, 300)}`);
+      const preview = JSON.stringify(initial.result).slice(0, 1200);
+      console.error('❌ Vertex response missing output URI:', preview);
+      throw new Error('Vertex video generation completed but output URI not found');
     }
 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:predictLongRunning?key=${GEMINI_API_KEY}`;
@@ -942,6 +1079,38 @@ app.get('/api/veo/download', async (req, res) => {
     const message = error?.message || String(error);
     return res.status(500).json({ error: message });
   }
+});
+
+app.get('/api/models', async (_req, res) => {
+  try {
+    const data = await listGeminiModels();
+    const models = Array.isArray(data.models) ? data.models : [];
+    const veoModels = models.filter(model => {
+      const name = (model.name || '').toLowerCase();
+      const displayName = (model.displayName || '').toLowerCase();
+      return name.includes('veo') || displayName.includes('veo');
+    });
+
+    res.json({
+      hasVeoAccess: VEO_PROVIDER === 'vertex' ? true : veoModels.length > 0,
+      totalModels: models.length,
+      veoModels: veoModels.map(model => model.name || model.displayName || 'unknown')
+    });
+  } catch (error) {
+    const message = error?.message || String(error);
+    res.json({
+      hasVeoAccess: VEO_PROVIDER === 'vertex',
+      totalModels: 0,
+      veoModels: [],
+      error: message
+    });
+  }
+});
+
+app.get('/api/health', (_req, res) => {
+  res.json({
+    ok: true
+  });
 });
 
 app.get('/health', (_req, res) => {

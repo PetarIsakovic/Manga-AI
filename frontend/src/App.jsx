@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import PdfUploader from './components/PdfUploader.jsx';
 import MangaReader from './components/MangaReader.jsx';
 import { renderPdfToImages, computePdfHash } from './utils/pdfRenderer.js';
-import { checkHealth } from './utils/api.js';
+import { checkModels } from './utils/api.js';
 
 export default function App() {
   const [pages, setPages] = useState([]);
@@ -11,12 +11,13 @@ export default function App() {
   const [error, setError] = useState(null);
   const [modelAccess, setModelAccess] = useState(null);
   const [currentFile, setCurrentFile] = useState(null);
-  const [displayZoom, setDisplayZoom] = useState(100); // Display zoom percentage (50-150)
+  const [displayZoom, setDisplayZoom] = useState(85); // Display zoom percentage (50-150)
+  const [showZoomControl, setShowZoomControl] = useState(false);
+  const [theme, setTheme] = useState('dark');
 
   useEffect(() => {
     // Check model access on mount
-    fetch('/api/models')
-      .then(r => r.json())
+    checkModels()
       .then(data => {
         console.log('Model access check:', data);
         setModelAccess(data);
@@ -25,6 +26,26 @@ export default function App() {
         }
       })
       .catch(err => console.error('Failed to check models:', err));
+  }, []);
+
+  useEffect(() => {
+    document.body.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const target = event.target;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      if (event.key.toLowerCase() === 'g') {
+        event.preventDefault();
+        setShowZoomControl(prev => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   const handlePdfLoad = useCallback(async (file) => {
@@ -46,51 +67,35 @@ export default function App() {
     }
   }, []);
 
-  const handleReset = useCallback(() => {
+  const handleGoHome = useCallback(() => {
     setPages([]);
     setPdfHash(null);
-    setError(null);
     setCurrentFile(null);
+    setShowZoomControl(false);
+    setError(null);
+    setLoading(false);
   }, []);
+
+  const showHeader = (modelAccess && !modelAccess.hasVeoAccess) || pages.length > 0;
 
   return (
     <div className="app">
-      <header className="app-header">
-        <h1>Manga Veo Reader</h1>
-        {modelAccess && !modelAccess.hasVeoAccess && (
-          <div style={{ 
-            background: '#ff4444', 
-            color: 'white', 
-            padding: '0.5rem 1rem', 
-            borderRadius: '6px',
-            fontSize: '0.875rem',
-            marginLeft: '1rem'
-          }}>
-            ⚠️ No Veo Access - Request at aistudio.google.com
-          </div>
-        )}
-        {pages.length > 0 && (
-          <>
-            <div className="zoom-control">
-              <label htmlFor="zoom-slider">
-                Size: {displayZoom}%
-              </label>
-              <input
-                id="zoom-slider"
-                type="range"
-                min="30"
-                max="150"
-                step="5"
-                value={displayZoom}
-                onChange={(e) => setDisplayZoom(Number(e.target.value))}
-              />
+      {showHeader && (
+        <header className="app-header minimal">
+          {modelAccess && !modelAccess.hasVeoAccess && (
+            <div style={{ 
+              background: '#ff4444', 
+              color: 'white', 
+              padding: '0.4rem 0.75rem', 
+              borderRadius: '999px',
+              fontSize: '0.75rem'
+            }}>
+              ⚠️ No Veo Access
             </div>
-            <button onClick={handleReset} className="reset-btn">
-              Load New PDF
-            </button>
-          </>
-        )}
-      </header>
+          )}
+          {pages.length > 0 && showZoomControl && null}
+        </header>
+      )}
       
       {error && <div className="error-banner">{error}</div>}
       
@@ -104,7 +109,17 @@ export default function App() {
       {pages.length === 0 && !loading ? (
         <PdfUploader onPdfLoad={handlePdfLoad} />
       ) : (
-        <MangaReader pages={pages} pdfHash={pdfHash} displayZoom={displayZoom} />
+        <MangaReader
+          pages={pages}
+          pdfHash={pdfHash}
+          displayZoom={displayZoom}
+          showZoomControl={showZoomControl}
+          onZoomChange={(value) => setDisplayZoom(value)}
+          onToggleZoom={() => setShowZoomControl(prev => !prev)}
+          theme={theme}
+          onToggleTheme={() => setTheme(prev => (prev === 'dark' ? 'light' : 'dark'))}
+          onGoHome={handleGoHome}
+        />
       )}
     </div>
   );

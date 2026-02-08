@@ -3,13 +3,17 @@ import { useState, useEffect } from 'react';
 export function useIntersectionObserver(ref, options = {}) {
   const [isIntersecting, setIsIntersecting] = useState(false);
   const [isNearViewport, setIsNearViewport] = useState(false);
+  const [intersectionRatio, setIntersectionRatio] = useState(0);
 
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
 
     const visibleObserver = new IntersectionObserver(
-      ([entry]) => setIsIntersecting(entry.isIntersecting),
+      ([entry]) => {
+        setIsIntersecting(entry.isIntersecting);
+        setIntersectionRatio(entry.intersectionRatio || 0);
+      },
       { threshold: options.threshold || 0.3 }
     );
 
@@ -27,5 +31,5 @@ export function useIntersectionObserver(ref, options = {}) {
     };
   }, [ref, options.threshold, options.rootMargin]);
 
-  return { isIntersecting, isNearViewport };
+  return { isIntersecting, isNearViewport, intersectionRatio };
 }
