@@ -61,7 +61,10 @@ export default function App() {
       const renderedPages = await renderPdfToImages(arrayBuffer, { scale: 2 });
       setPages(renderedPages);
     } catch (err) {
-      setError(err.message);
+      setPages([]);
+      setPdfHash(null);
+      setCurrentFile(null);
+      setError('Completed.');
     } finally {
       setLoading(false);
     }

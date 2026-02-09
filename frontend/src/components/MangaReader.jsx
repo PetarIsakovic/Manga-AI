@@ -43,6 +43,7 @@ export default function MangaReader({
   const pageStatesRef = useRef(pageStates);
   const generationCountersRef = useRef(new Map());
   const clearedCacheRef = useRef(false);
+  const didAutoEnqueueRef = useRef(false);
   const { setVideo, getAllVideos, clearCache } = useVideoCache();
 
   const makeCacheKey = useCallback((pageIndex) => {
@@ -70,6 +71,7 @@ export default function MangaReader({
     setAutoMode(pages.length > 0);
     setAutoDone(false);
     setAutoSkipped(false);
+    didAutoEnqueueRef.current = false;
   }, [pages, clearCache]);
 
   useEffect(() => {
@@ -191,6 +193,32 @@ export default function MangaReader({
       setTimeout(() => updatePromptStage(pageIndex, 4), 3200)
     );
   }, [clearPromptStageTimers, updatePromptStage]);
+
+  const stopAllGeneration = useCallback(() => {
+    queueRef.current = [];
+    if (abortRef.current) {
+      abortRef.current.controller.abort();
+    }
+    generatingRef.current = false;
+    abortRef.current = null;
+    pageStageTimersRef.current.forEach((timers) => {
+      timers.forEach(timerId => clearTimeout(timerId));
+    });
+    pageStageTimersRef.current.clear();
+    progressTimersRef.current.forEach((timerId) => clearInterval(timerId));
+    progressTimersRef.current.clear();
+    clearPromptStageTimers();
+    setPromptBusy(false);
+    setPromptOpen(false);
+    setPromptOverlays({});
+    setPageStates(prev =>
+      prev.map(state =>
+        state.status === 'queued' || state.status === 'generating'
+          ? { ...state, status: 'idle', error: null, stage: 0, progress: 0 }
+          : state
+      )
+    );
+  }, [clearPromptStageTimers]);
 
   const generateForPage = useCallback(async (pageIndex, options = {}) => {
     const page = pages[pageIndex];
@@ -383,6 +411,12 @@ export default function MangaReader({
   const enqueuePage = useCallback((pageIndex, options = {}) => {
     if (pageIndex < 0 || pageIndex >= pages.length) return;
     const { userPrompt, force = false, source } = options;
+    if (autoSkipped && source === 'auto') {
+      return;
+    }
+    if (source === 'auto' && (promptBusy || promptOpen || promptOverlays[pageIndex])) {
+      return;
+    }
     const state = pageStatesRef.current[pageIndex] || { status: 'idle' };
     const alreadyQueued = queueRef.current.some(item => item.pageIndex === pageIndex);
     const shouldOverride = force || Boolean(userPrompt);
@@ -411,7 +445,7 @@ export default function MangaReader({
     });
     queueRef.current.push({ pageIndex, userPrompt, source, generationId: nextGenerationId });
     pumpQueue();
-  }, [pages.length, pumpQueue, updatePageState, cancelGeneration]);
+  }, [pages.length, pumpQueue, updatePageState, cancelGeneration, autoSkipped, promptBusy, promptOpen, promptOverlays]);
 
   const handlePromptSubmit = useCallback((event) => {
     event.preventDefault();
@@ -423,11 +457,14 @@ export default function MangaReader({
     if (promptOverlays[currentIndexRef.current]) {
       return;
     }
+    stopAllGeneration();
+    setAutoMode(false);
+    setAutoSkipped(true);
     enqueuePage(currentIndexRef.current, { userPrompt: text, force: true, source: 'prompt' });
     setPromptBusy(true);
     setPromptOpen(false);
     setPromptOverlayForPage(currentIndexRef.current, { text, stage: 0 });
-  }, [enqueuePage, promptText, setPromptOverlayForPage, promptOverlays]);
+  }, [enqueuePage, promptText, setPromptOverlayForPage, promptOverlays, stopAllGeneration]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -471,9 +508,12 @@ export default function MangaReader({
 
   useEffect(() => {
     if (!pages.length) return;
+    if (!autoMode) return;
+    if (didAutoEnqueueRef.current) return;
+    didAutoEnqueueRef.current = true;
     queueRef.current = [];
-    pages.forEach((_, idx) => enqueuePage(idx, { force: true, source: 'auto' }));
-  }, [pages, enqueuePage]);
+    pages.forEach((_, idx) => enqueuePage(idx, { source: 'auto' }));
+  }, [pages, enqueuePage, autoMode]);
 
   useEffect(() => {
     if (!autoMode || !pages.length) return;
@@ -486,53 +526,17 @@ export default function MangaReader({
   }, [autoMode, pageStates, pages.length]);
 
   const handleSkipAuto = useCallback(() => {
-    queueRef.current = [];
-    if (abortRef.current) {
-      abortRef.current.controller.abort();
-    }
-    generatingRef.current = false;
-    abortRef.current = null;
-    pageStageTimersRef.current.forEach((timers) => {
-      timers.forEach(timerId => clearTimeout(timerId));
-    });
-    pageStageTimersRef.current.clear();
-    progressTimersRef.current.forEach((timerId) => clearInterval(timerId));
-    progressTimersRef.current.clear();
-    setPageStates(prev =>
-      prev.map(state =>
-        state.status === 'queued' || state.status === 'generating'
-          ? { ...state, status: 'idle', error: null, stage: 0, progress: 0 }
-          : state
-      )
-    );
+    stopAllGeneration();
     setAutoMode(false);
     setAutoSkipped(true);
     setShowVideos(true);
-  }, []);
+  }, [stopAllGeneration]);
 
   const handleCancelAuto = useCallback(() => {
-    queueRef.current = [];
-    if (abortRef.current) {
-      abortRef.current.controller.abort();
-    }
-    generatingRef.current = false;
-    abortRef.current = null;
-    pageStageTimersRef.current.forEach((timers) => {
-      timers.forEach(timerId => clearTimeout(timerId));
-    });
-    pageStageTimersRef.current.clear();
-    progressTimersRef.current.forEach((timerId) => clearInterval(timerId));
-    progressTimersRef.current.clear();
-    setPageStates(prev =>
-      prev.map(state =>
-        state.status === 'queued' || state.status === 'generating'
-          ? { ...state, status: 'idle', error: null, stage: 0, progress: 0 }
-          : state
-      )
-    );
+    stopAllGeneration();
     setAutoMode(false);
     setAutoSkipped(true);
-  }, []);
+  }, [stopAllGeneration]);
 
   useEffect(() => {
     if (!showZoomControl) return;
@@ -608,7 +612,7 @@ export default function MangaReader({
             pageIndex={index}
             state={pageStates[index] || { status: 'idle', videoUrl: null, error: null }}
             showVideo={showVideos}
-            prefetchFn={PREFETCH_ENABLED ? generateForPage : null}
+            prefetchFn={PREFETCH_ENABLED && !autoSkipped ? generateForPage : null}
             isCurrent={index === currentIndex}
             needsVideo={(pageStates[index]?.status || 'idle') !== 'ready'}
             onVisibilityChange={handleVisibilityChange}
