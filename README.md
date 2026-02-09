@@ -1,12 +1,10 @@
 # Manga Veo Reader
 
-A minimal scroll reader for manga PDFs with Gemini Veo 3.1 animation generation.
+Minimal scroll reader for manga PDFs with Veo 3.1 animation generation.
 
 ## Requirements
 
-✅ **Veo 3.1 is now available in preview!** No waitlist needed.
-
-You just need:
+You need:
 1. A Google account
 2. A Gemini API key from https://aistudio.google.com/apikey
 3. Enable "Generative Language API" in Google Cloud Console
@@ -42,15 +40,15 @@ npm run dev:all
 
 ## Features
 
-- ✅ PDF upload and rendering
-- ✅ Vertical scroll manga reader
-- ✅ Veo 3.1 video generation (8s, 720p/1080p/4K)
-- ✅ Native audio generation
-- ✅ Auto-play when in viewport
-- ✅ Video caching with IndexedDB
-- ✅ Smart prefetching
-- ✅ Batch generation with progress
-- ✅ Portrait (9:16) and landscape (16:9) support
+- PDF upload and rendering
+- Vertical scroll manga reader
+- Veo 3.1 video generation (8s, 720p/1080p/4K)
+- Native audio generation
+- Auto-play when in viewport
+- Video caching with IndexedDB
+- Smart prefetching
+- Batch generation with progress
+- Portrait (9:16) and landscape (16:9) support
 
 ## Pricing
 
@@ -76,4 +74,3 @@ Check latest pricing: https://ai.google.dev/pricing
 - Verify your API key at https://aistudio.google.com/apikey
 - Check your project has billing enabled
 - Ensure you're not hitting quota limits
-# Manga-AI
