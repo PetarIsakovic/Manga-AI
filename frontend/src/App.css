@@ -148,6 +148,7 @@ body[data-theme="light"] {
   justify-content: center;
   gap: 1rem;
   z-index: 1000;
+  color: #ffffff;
 }
 
 .spinner {
@@ -349,6 +350,138 @@ body[data-theme="light"] {
   color: #fff;
 }
 
+.page-prompt-overlay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  --prompt-border: 2px;
+  --prompt-angle: 0deg;
+  --prompt-beam: rgba(56, 189, 248, 1);
+  background:
+    linear-gradient(#ffffff, #ffffff) padding-box,
+    conic-gradient(
+      from var(--prompt-angle),
+      rgba(56, 189, 248, 0) 0deg,
+      rgba(56, 189, 248, 0) 240deg,
+      rgba(56, 189, 248, 0.2) 270deg,
+      rgba(56, 189, 248, 1) 320deg,
+      rgba(56, 189, 248, 0.35) 350deg,
+      rgba(56, 189, 248, 0) 360deg
+    ) border-box;
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  border: calc(var(--prompt-border) * 1.8) solid transparent;
+  border-radius: 18px;
+  padding: 0.65rem 0.85rem 0.85rem;
+  color: #111;
+  max-width: min(86%, 560px);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.25);
+  z-index: 3;
+  pointer-events: auto;
+  word-break: break-word;
+  animation: promptBorderSpin 1.1s linear infinite, promptOverlayIn 260ms ease;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.page-prompt-text {
+  font-size: 0.85rem;
+  line-height: 1.25;
+  text-align: left;
+  padding: 0.2rem 0.2rem 0.5rem;
+}
+
+.page-prompt-steps {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.25rem;
+  padding: 0.55rem 0.45rem 0.2rem;
+  background: #ffffff;
+  border: 1px solid #111;
+  border-radius: 14px;
+}
+
+.page-prompt-line {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: calc(0.55rem + 6px);
+  height: 2px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.page-prompt-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: var(--prompt-progress, 0%);
+  background: #111;
+  transition: width 220ms ease;
+}
+
+.page-prompt-step {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.65rem;
+  color: #111;
+  min-width: 44px;
+}
+
+.page-prompt-dot {
+  width: 12px;
+  height: 12px;
+  margin-top: 0;
+  border-radius: 999px;
+  border: 1.5px solid #111;
+  background: #fff;
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+
+.page-prompt-step.done .page-prompt-dot {
+  background: #111;
+}
+
+.page-prompt-step.active .page-prompt-dot {
+  box-shadow: 0 0 0 4px rgba(0, 0, 0, 0.08);
+}
+
+.page-prompt-cancel {
+  align-self: flex-end;
+  margin-top: 0.55rem;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.65rem;
+  border-radius: 999px;
+  border: 1px solid #111;
+  background: #fff;
+  color: #111;
+  cursor: pointer;
+}
+
+.page-prompt-cancel:hover {
+  background: #f3f4f6;
+}
+
+@keyframes promptOverlayIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 28px)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
 .prompt-overlay {
   position: fixed;
   left: 50%;
@@ -389,22 +522,11 @@ body[data-theme="light"] {
   opacity: 0;
 }
 
+/* keep the prompt input clean: no animated border */
 .prompt-overlay.busy .prompt-shell {
-  border: calc(var(--prompt-border) * 1.8) solid transparent;
-  background:
-    linear-gradient(#ffffff, #ffffff) padding-box,
-    conic-gradient(
-      from var(--prompt-angle),
-      rgba(56, 189, 248, 0) 0deg,
-      rgba(56, 189, 248, 0) 240deg,
-      rgba(56, 189, 248, 0.2) 270deg,
-      rgba(56, 189, 248, 1) 320deg,
-      rgba(56, 189, 248, 0.35) 350deg,
-      rgba(56, 189, 248, 0) 360deg
-    ) border-box;
-  background-origin: border-box;
-  background-clip: padding-box, border-box;
-  animation: promptBorderSpin 1.1s linear infinite;
+  border: 1px solid transparent;
+  background: transparent;
+  animation: none;
 }
 
 .prompt-input {
@@ -415,6 +537,7 @@ body[data-theme="light"] {
   border-radius: 999px;
   padding: 0.75rem 1.1rem;
   font-size: 0.95rem;
+  text-align: left;
   outline: none;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
 }
@@ -464,6 +587,124 @@ body[data-theme="light"] {
   align-items: center;
   gap: 0.35rem;
   pointer-events: auto;
+}
+
+.auto-progress {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 10, 0.6);
+  display: grid;
+  place-items: center;
+  z-index: 1200;
+}
+
+.auto-progress-card {
+  width: min(560px, 90vw);
+  background: #fff;
+  border: 1px solid #111;
+  border-radius: 18px;
+  padding: 1.2rem 1.2rem 1rem;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  color: #111;
+}
+
+.auto-progress-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+
+.auto-progress-summary {
+  font-size: 0.85rem;
+  margin-bottom: 0.8rem;
+}
+
+.auto-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 46vh;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+
+.auto-progress-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: 8px;
+  background: rgba(17, 17, 17, 0.05);
+  position: relative;
+  overflow: hidden;
+}
+
+.auto-progress-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: var(--progress, 0%);
+  background: rgba(191, 219, 254, 0.85);
+  transition: width 0.8s linear;
+  border-radius: inherit;
+  z-index: 0;
+}
+
+.auto-progress-row > span {
+  position: relative;
+  z-index: 1;
+}
+
+.auto-progress-stage {
+  font-weight: 600;
+}
+
+.auto-progress-stage.stage-1 {
+  color: #f59e0b;
+}
+
+.auto-progress-stage.stage-2 {
+  color: #3b82f6;
+}
+
+.auto-progress-stage.stage-3 {
+  color: #6366f1;
+}
+
+.auto-progress-stage.stage-4 {
+  color: #10b981;
+}
+
+.auto-progress-skip {
+  margin-top: 0.9rem;
+  width: 100%;
+  border-radius: 999px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #111;
+  background: #fff;
+  color: #111;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.auto-progress-skip:hover {
+  background: #f3f4f6;
+}
+
+.auto-progress-cancel {
+  margin-top: 0.4rem;
+  width: 100%;
+  border-radius: 999px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #111;
+  background: #111;
+  color: #fff;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.auto-progress-cancel:hover {
+  opacity: 0.9;
 }
 
 .quickbar::before {
@@ -582,7 +823,8 @@ body[data-theme="light"] {
   white-space: nowrap;
 }
 
-.quickbar-button.active::after {
+.quickbar-button:hover::after,
+.quickbar-button:focus-visible::after {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }

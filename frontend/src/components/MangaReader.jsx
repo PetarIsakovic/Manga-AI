@@ -18,15 +18,22 @@ export default function MangaReader({
   onGoHome
 }) {
   const [pageStates, setPageStates] = useState(() =>
-    pages.map(() => ({ status: 'idle', videoUrl: null, error: null }))
+    pages.map(() => ({ status: 'idle', videoUrl: null, error: null, stage: 0, progress: 0, generationId: 0 }))
   );
   const [showVideos, setShowVideos] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptBusy, setPromptBusy] = useState(false);
   const [promptText, setPromptText] = useState('');
+  const [promptOverlays, setPromptOverlays] = useState({});
+  const promptStageTimersRef = useRef([]);
+  const pageStageTimersRef = useRef(new Map());
+  const progressTimersRef = useRef(new Map());
   const [activeQuickAction, setActiveQuickAction] = useState(null);
   const [zipBusy, setZipBusy] = useState(false);
+  const [autoMode, setAutoMode] = useState(false);
+  const [autoDone, setAutoDone] = useState(false);
+  const [autoSkipped, setAutoSkipped] = useState(false);
   const promptInputRef = useRef(null);
   const currentIndexRef = useRef(0);
   const generatingRef = useRef(false);
@@ -34,24 +41,35 @@ export default function MangaReader({
   const queueRef = useRef([]);
   const ratiosRef = useRef(new Map());
   const pageStatesRef = useRef(pageStates);
+  const generationCountersRef = useRef(new Map());
   const clearedCacheRef = useRef(false);
   const { setVideo, getAllVideos, clearCache } = useVideoCache();
+
+  const makeCacheKey = useCallback((pageIndex) => {
+    const prefix = pdfHash || 'pages';
+    return `${prefix}::${pageIndex}`;
+  }, [pdfHash]);
 
   useEffect(() => {
     if (!clearedCacheRef.current) {
       clearedCacheRef.current = true;
       clearCache();
     }
-    setPageStates(pages.map(() => ({ status: 'idle', videoUrl: null, error: null })));
+    setPageStates(pages.map(() => ({ status: 'idle', videoUrl: null, error: null, stage: 0, progress: 0, generationId: 0 })));
     setCurrentIndex(0);
     currentIndexRef.current = 0;
     queueRef.current = [];
     ratiosRef.current.clear();
+    generationCountersRef.current.clear();
     generatingRef.current = false;
-    setShowVideos(true);
+    setShowVideos(false);
     setPromptOpen(false);
     setPromptBusy(false);
     setPromptText('');
+    setPromptOverlays({});
+    setAutoMode(pages.length > 0);
+    setAutoDone(false);
+    setAutoSkipped(false);
   }, [pages, clearCache]);
 
   useEffect(() => {
@@ -66,6 +84,7 @@ export default function MangaReader({
     }
   }, [promptOpen]);
 
+  const currentPromptLocked = Boolean(promptOverlays[currentIndex]);
   const currentStatus = pageStates[currentIndex]?.status || 'idle';
   const isCurrentProcessing = currentStatus === 'generating' || currentStatus === 'queued';
   const hasActiveGeneration = pageStates.some(state => state.status === 'generating' || state.status === 'queued');
@@ -94,21 +113,109 @@ export default function MangaReader({
     });
   }, []);
 
+  const clearPromptStageTimers = useCallback(() => {
+    promptStageTimersRef.current.forEach(timerId => clearTimeout(timerId));
+    promptStageTimersRef.current = [];
+  }, []);
+
+  const clearPageStageTimers = useCallback((pageIndex) => {
+    const timers = pageStageTimersRef.current.get(pageIndex);
+    if (timers) {
+      timers.forEach(timerId => clearTimeout(timerId));
+      pageStageTimersRef.current.delete(pageIndex);
+    }
+  }, []);
+
+  const clearPageProgressTimer = useCallback((pageIndex) => {
+    const timer = progressTimersRef.current.get(pageIndex);
+    if (timer) {
+      clearInterval(timer);
+      progressTimersRef.current.delete(pageIndex);
+    }
+  }, []);
+
+  const startPageProgress = useCallback((pageIndex) => {
+    clearPageProgressTimer(pageIndex);
+    const startedAt = Date.now();
+    const pollEstimateMs = 15 * 5000;
+    const startDelayMs = 2500;
+    updatePageState(pageIndex, { progress: 0 });
+    const id = setInterval(() => {
+      const elapsed = Math.max(0, Date.now() - startedAt - startDelayMs);
+      const progress = Math.min(elapsed / pollEstimateMs, 0.95);
+      updatePageState(pageIndex, { progress });
+    }, 1000);
+    progressTimersRef.current.set(pageIndex, id);
+  }, [clearPageProgressTimer, updatePageState]);
+
+  const updatePageStage = useCallback((pageIndex, stage) => {
+    updatePageState(pageIndex, { stage });
+  }, [updatePageState]);
+
+  const schedulePageStages = useCallback((pageIndex) => {
+    clearPageStageTimers(pageIndex);
+    const timers = [
+      setTimeout(() => updatePageStage(pageIndex, 2), 900),
+      setTimeout(() => updatePageStage(pageIndex, 3), 1900),
+      setTimeout(() => updatePageStage(pageIndex, 4), 2900)
+    ];
+    pageStageTimersRef.current.set(pageIndex, timers);
+  }, [clearPageStageTimers, updatePageStage]);
+
+  const updatePromptStage = useCallback((pageIndex, stage) => {
+    setPromptOverlays((current) => {
+      const existing = current[pageIndex];
+      if (!existing) return current;
+      return { ...current, [pageIndex]: { ...existing, stage } };
+    });
+  }, []);
+
+  const setPromptOverlayForPage = useCallback((pageIndex, overlay) => {
+    setPromptOverlays((current) => ({ ...current, [pageIndex]: overlay }));
+  }, []);
+
+  const clearPromptOverlayForPage = useCallback((pageIndex) => {
+    setPromptOverlays((current) => {
+      if (!current[pageIndex]) return current;
+      const next = { ...current };
+      delete next[pageIndex];
+      return next;
+    });
+  }, []);
+
+  const schedulePromptStages = useCallback((pageIndex) => {
+    clearPromptStageTimers();
+    promptStageTimersRef.current.push(
+      setTimeout(() => updatePromptStage(pageIndex, 2), 1200),
+      setTimeout(() => updatePromptStage(pageIndex, 3), 2200),
+      setTimeout(() => updatePromptStage(pageIndex, 4), 3200)
+    );
+  }, [clearPromptStageTimers, updatePromptStage]);
+
   const generateForPage = useCallback(async (pageIndex, options = {}) => {
     const page = pages[pageIndex];
-    const cacheKey = `${pdfHash}-${pageIndex}-${Date.now()}`;
-    const { userPrompt } = options;
+    const cacheKey = makeCacheKey(pageIndex);
+    const { userPrompt, source } = options;
+    const generationId = options.generationId ?? generationCountersRef.current.get(pageIndex) ?? 0;
     
     // NEVER use cache - always generate fresh
-    updatePageState(pageIndex, { status: 'generating', error: null });
+    updatePageState(pageIndex, { status: 'generating', error: null, stage: 1 });
     
     try {
       const controller = new AbortController();
       abortRef.current = { pageIndex, controller };
+      if (source === 'prompt') {
+        updatePromptStage(pageIndex, 1);
+      }
+      schedulePageStages(pageIndex);
+      startPageProgress(pageIndex);
       console.log('🎬 Requesting NEW video generation for page', pageIndex);
       const result = await generateVideo(page.imageBase64, page.mimeType, page.aspectRatio, {
         userPrompt,
-        signal: controller.signal
+        signal: controller.signal,
+        pageIndex,
+        pageNumber: pageIndex + 1,
+        source
       });
       
       console.log('✅ Got result:', result);
@@ -123,28 +230,59 @@ export default function MangaReader({
         videoUrl = URL.createObjectURL(blob);
       }
       
+      if (generationCountersRef.current.get(pageIndex) !== generationId) {
+        clearPageProgressTimer(pageIndex);
+        clearPageStageTimers(pageIndex);
+        if (source === 'prompt') {
+          clearPromptStageTimers();
+        }
+        return false;
+      }
       await setVideo(cacheKey, videoUrl);
-      updatePageState(pageIndex, { status: 'ready', videoUrl });
+      clearPageProgressTimer(pageIndex);
+      updatePageState(pageIndex, { status: 'ready', videoUrl, stage: 5, progress: 1, generationId });
       if (abortRef.current?.pageIndex === pageIndex) {
         abortRef.current = null;
       }
+      clearPageStageTimers(pageIndex);
+      if (source === 'prompt') {
+        clearPromptStageTimers();
+      }
       return true;
     } catch (error) {
+      if (generationCountersRef.current.get(pageIndex) !== generationId) {
+        clearPageProgressTimer(pageIndex);
+        clearPageStageTimers(pageIndex);
+        if (source === 'prompt') {
+          clearPromptStageTimers();
+        }
+        return false;
+      }
       if (error?.name === 'AbortError' || /aborted/i.test(error?.message || '')) {
-        updatePageState(pageIndex, { status: 'idle', error: null });
+        clearPageProgressTimer(pageIndex);
+        updatePageState(pageIndex, { status: 'idle', error: null, stage: 0, progress: 0, generationId });
         if (abortRef.current?.pageIndex === pageIndex) {
           abortRef.current = null;
+        }
+        clearPageStageTimers(pageIndex);
+        if (source === 'prompt') {
+          clearPromptStageTimers();
         }
         return false;
       }
       console.error('❌ Generation failed:', error);
-      updatePageState(pageIndex, { status: 'failed', error: error.message });
+      clearPageProgressTimer(pageIndex);
+      updatePageState(pageIndex, { status: 'failed', error: error.message, stage: -1, progress: 0, generationId });
       if (abortRef.current?.pageIndex === pageIndex) {
         abortRef.current = null;
       }
+      clearPageStageTimers(pageIndex);
+      if (source === 'prompt') {
+        clearPromptStageTimers();
+      }
       return false;
     }
-  }, [pages, pdfHash, setVideo, updatePageState]);
+  }, [pages, makeCacheKey, setVideo, updatePageState, updatePromptStage, clearPromptStageTimers, schedulePageStages, clearPageStageTimers, startPageProgress, clearPageProgressTimer]);
 
   const buildZipName = useCallback(() => {
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -153,6 +291,11 @@ export default function MangaReader({
 
   const parseCacheKey = useCallback((key) => {
     if (!key) return { pageIndex: null, suffix: 'video' };
+    if (key.includes('::')) {
+      const [_, indexPart] = key.split('::');
+      const pageIndex = parseInt(indexPart, 10);
+      return { pageIndex: Number.isFinite(pageIndex) ? pageIndex : null, suffix: 'video' };
+    }
     const firstDash = key.indexOf('-');
     const secondDash = key.indexOf('-', firstDash + 1);
     if (firstDash === -1 || secondDash === -1) {
@@ -168,7 +311,9 @@ export default function MangaReader({
     setZipBusy(true);
     try {
       const all = await getAllVideos();
-      const filtered = pdfHash ? all.filter(entry => entry.key.startsWith(`${pdfHash}-`)) : all;
+      const filtered = pdfHash
+        ? all.filter(entry => entry.key.startsWith(`${pdfHash}::`) || entry.key.startsWith(`${pdfHash}-`))
+        : all;
       if (!filtered.length) {
         setZipBusy(false);
         return;
@@ -205,23 +350,42 @@ export default function MangaReader({
     generatingRef.current = true;
     if (next.source === 'prompt') {
       setPromptBusy(true);
+      updatePromptStage(next.pageIndex, 1);
+      schedulePromptStages(next.pageIndex);
     }
-    generateForPage(next.pageIndex, { userPrompt: next.userPrompt }).finally(() => {
+    generateForPage(next.pageIndex, { userPrompt: next.userPrompt, source: next.source, generationId: next.generationId }).finally(() => {
       generatingRef.current = false;
       if (next.source === 'prompt') {
         setPromptBusy(false);
         setPromptOpen(false);
         setPromptText('');
+        clearPromptOverlayForPage(next.pageIndex);
+        clearPromptStageTimers();
       }
       pumpQueue();
     });
-  }, [generateForPage]);
+  }, [generateForPage, clearPromptStageTimers, schedulePromptStages, updatePromptStage, clearPromptOverlayForPage]);
+
+  const cancelGeneration = useCallback((pageIndex) => {
+    queueRef.current = queueRef.current.filter(item => item.pageIndex !== pageIndex);
+    if (abortRef.current?.pageIndex === pageIndex) {
+      abortRef.current.controller.abort();
+      return;
+    }
+    clearPageProgressTimer(pageIndex);
+    updatePageState(pageIndex, { status: 'idle', error: null, progress: 0 });
+    updatePageStage(pageIndex, 0);
+    clearPromptOverlayForPage(pageIndex);
+    clearPromptStageTimers();
+    clearPageStageTimers(pageIndex);
+  }, [updatePageState, clearPromptStageTimers, clearPromptOverlayForPage, clearPageStageTimers, updatePageStage, clearPageProgressTimer]);
 
   const enqueuePage = useCallback((pageIndex, options = {}) => {
     if (pageIndex < 0 || pageIndex >= pages.length) return;
     const { userPrompt, force = false, source } = options;
     const state = pageStatesRef.current[pageIndex] || { status: 'idle' };
     const alreadyQueued = queueRef.current.some(item => item.pageIndex === pageIndex);
+    const shouldOverride = force || Boolean(userPrompt);
 
     if (!force) {
       if (state.status === 'generating' || state.status === 'queued') return;
@@ -232,19 +396,22 @@ export default function MangaReader({
       queueRef.current = queueRef.current.filter(item => item.pageIndex !== pageIndex);
     }
 
-    updatePageState(pageIndex, { status: 'queued', error: null });
-    queueRef.current.push({ pageIndex, userPrompt, source });
-    pumpQueue();
-  }, [pages.length, pumpQueue, updatePageState]);
-
-  const cancelGeneration = useCallback((pageIndex) => {
-    queueRef.current = queueRef.current.filter(item => item.pageIndex !== pageIndex);
-    if (abortRef.current?.pageIndex === pageIndex) {
-      abortRef.current.controller.abort();
-      return;
+    if (shouldOverride && (state.status === 'generating' || state.status === 'queued')) {
+      cancelGeneration(pageIndex);
     }
-    updatePageState(pageIndex, { status: 'idle', error: null });
-  }, [updatePageState]);
+    const nextGenerationId = (generationCountersRef.current.get(pageIndex) || 0) + 1;
+    generationCountersRef.current.set(pageIndex, nextGenerationId);
+    updatePageState(pageIndex, {
+      status: 'queued',
+      error: null,
+      stage: 0,
+      progress: 0,
+      generationId: nextGenerationId,
+      ...(shouldOverride ? { videoUrl: null } : {})
+    });
+    queueRef.current.push({ pageIndex, userPrompt, source, generationId: nextGenerationId });
+    pumpQueue();
+  }, [pages.length, pumpQueue, updatePageState, cancelGeneration]);
 
   const handlePromptSubmit = useCallback((event) => {
     event.preventDefault();
@@ -253,9 +420,14 @@ export default function MangaReader({
       setPromptOpen(false);
       return;
     }
+    if (promptOverlays[currentIndexRef.current]) {
+      return;
+    }
     enqueuePage(currentIndexRef.current, { userPrompt: text, force: true, source: 'prompt' });
     setPromptBusy(true);
-  }, [enqueuePage, promptText]);
+    setPromptOpen(false);
+    setPromptOverlayForPage(currentIndexRef.current, { text, stage: 0 });
+  }, [enqueuePage, promptText, setPromptOverlayForPage, promptOverlays]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -276,8 +448,14 @@ export default function MangaReader({
         setShowVideos(prev => !prev);
       } else if (key === 'h') {
         event.preventDefault();
-        if (!promptBusy && !hasActiveGeneration) {
-          setPromptOpen(prev => !prev);
+        if (!promptOverlays[currentIndexRef.current]) {
+          setPromptOpen(prev => {
+            const next = !prev;
+            if (next) {
+              setPromptText('');
+            }
+            return next;
+          });
         }
       } else if (key === 'g') {
         if (onToggleZoom) {
@@ -289,7 +467,72 @@ export default function MangaReader({
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [cancelGeneration, enqueuePage, hasActiveGeneration, isCurrentProcessing, onToggleZoom, promptBusy]);
+  }, [cancelGeneration, enqueuePage, hasActiveGeneration, isCurrentProcessing, onToggleZoom, promptBusy, promptOverlays]);
+
+  useEffect(() => {
+    if (!pages.length) return;
+    queueRef.current = [];
+    pages.forEach((_, idx) => enqueuePage(idx, { force: true, source: 'auto' }));
+  }, [pages, enqueuePage]);
+
+  useEffect(() => {
+    if (!autoMode || !pages.length) return;
+    const allDone = pageStates.every(state => state.status === 'ready' || state.status === 'failed');
+    if (allDone) {
+      setAutoMode(false);
+      setAutoDone(true);
+      setShowVideos(true);
+    }
+  }, [autoMode, pageStates, pages.length]);
+
+  const handleSkipAuto = useCallback(() => {
+    queueRef.current = [];
+    if (abortRef.current) {
+      abortRef.current.controller.abort();
+    }
+    generatingRef.current = false;
+    abortRef.current = null;
+    pageStageTimersRef.current.forEach((timers) => {
+      timers.forEach(timerId => clearTimeout(timerId));
+    });
+    pageStageTimersRef.current.clear();
+    progressTimersRef.current.forEach((timerId) => clearInterval(timerId));
+    progressTimersRef.current.clear();
+    setPageStates(prev =>
+      prev.map(state =>
+        state.status === 'queued' || state.status === 'generating'
+          ? { ...state, status: 'idle', error: null, stage: 0, progress: 0 }
+          : state
+      )
+    );
+    setAutoMode(false);
+    setAutoSkipped(true);
+    setShowVideos(true);
+  }, []);
+
+  const handleCancelAuto = useCallback(() => {
+    queueRef.current = [];
+    if (abortRef.current) {
+      abortRef.current.controller.abort();
+    }
+    generatingRef.current = false;
+    abortRef.current = null;
+    pageStageTimersRef.current.forEach((timers) => {
+      timers.forEach(timerId => clearTimeout(timerId));
+    });
+    pageStageTimersRef.current.clear();
+    progressTimersRef.current.forEach((timerId) => clearInterval(timerId));
+    progressTimersRef.current.clear();
+    setPageStates(prev =>
+      prev.map(state =>
+        state.status === 'queued' || state.status === 'generating'
+          ? { ...state, status: 'idle', error: null, stage: 0, progress: 0 }
+          : state
+      )
+    );
+    setAutoMode(false);
+    setAutoSkipped(true);
+  }, []);
 
   useEffect(() => {
     if (!showZoomControl) return;
@@ -327,9 +570,13 @@ export default function MangaReader({
                   setPromptOpen(false);
                 }
               }}
-              placeholder="Type a prompt for the current page and press Enter…"
-              readOnly={promptBusy}
-              aria-busy={promptBusy}
+              placeholder={
+                currentPromptLocked
+                  ? 'Prompt already queued for this page. Scroll to another page.'
+                  : 'Type a prompt for the current page and press Enter…'
+              }
+              readOnly={currentPromptLocked}
+              aria-busy={promptBusy || currentPromptLocked}
             />
           </div>
         </form>
@@ -352,7 +599,7 @@ export default function MangaReader({
       )}
       <div
         className="pages-container"
-        style={{ '--page-scale': displayZoom / 100 }}
+        style={{ '--page-scale': displayZoom / 100, display: autoMode ? 'none' : undefined }}
       >
         {pages.map((page, index) => (
           <PageCard
@@ -365,9 +612,59 @@ export default function MangaReader({
             isCurrent={index === currentIndex}
             needsVideo={(pageStates[index]?.status || 'idle') !== 'ready'}
             onVisibilityChange={handleVisibilityChange}
+            promptOverlay={promptOverlays[index] || null}
+            onCancelPrompt={cancelGeneration}
           />
         ))}
       </div>
+
+      {autoMode && (
+        <div className="auto-progress">
+          <div className="auto-progress-card">
+            <div className="auto-progress-title">Generating Video Versions</div>
+            <div className="auto-progress-summary">
+              Processed {pageStates.filter(state => state.status === 'ready' || state.status === 'failed').length}
+              /{pages.length} pages
+            </div>
+            <div className="auto-progress-list">
+              {pageStates.map((state, index) => {
+                const stage = state.stage ?? 0;
+                const progressValue = (() => {
+                  if (state.status === 'ready') return 1;
+                  if (state.status === 'generating') return state.progress ?? 0;
+                  return 0;
+                })();
+                const stageLabel = (() => {
+                  if (state.status === 'failed') return 'Failed';
+                  if (state.status === 'ready') return 'Done';
+                  if (stage <= 0) return 'Queue';
+                  if (stage === 1) return 'Upload';
+                  if (stage === 2) return 'Analyze';
+                  if (stage === 3) return 'Prompt';
+                  if (stage === 4) return 'Generate';
+                  return 'Queue';
+                })();
+                return (
+                  <div
+                    className="auto-progress-row"
+                    key={index}
+                    style={{ '--progress': `${Math.round(progressValue * 100)}%` }}
+                  >
+                    <span>Page {index + 1}</span>
+                    <span className={`auto-progress-stage stage-${stage}`}>{stageLabel}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <button type="button" className="auto-progress-skip" onClick={handleSkipAuto}>
+              Skip to Pages
+            </button>
+            <button type="button" className="auto-progress-cancel" onClick={handleCancelAuto}>
+              Cancel Generation
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="quickbar" aria-hidden={pages.length === 0}>
         <div
@@ -409,13 +706,17 @@ export default function MangaReader({
             <button
               type="button"
               className={`quickbar-button${activeQuickAction === 'prompt' ? ' active' : ''}`}
-              onClick={() => !promptBusy && !hasActiveGeneration && setPromptOpen(true)}
+              onClick={() => {
+                if (currentPromptLocked) return;
+                setPromptText('');
+                setPromptOpen(true);
+              }}
               onMouseEnter={() => setActiveQuickAction('prompt')}
               onFocus={() => setActiveQuickAction('prompt')}
               aria-label="Open prompt (H)"
               title="Prompt (H)"
               data-label="Prompt"
-              disabled={promptBusy || hasActiveGeneration}
+              disabled={currentPromptLocked}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M4 5h16v10H8l-4 4z" />

@@ -53,31 +53,37 @@ const VERTEX_OUTPUT_GCS_URI = process.env.VERTEX_OUTPUT_GCS_URI;
 const PORT = process.env.PORT || 3001;
 
 const BASE_CONSTRAINTS_TEXT = [
-  'Keep the entire page fixed and fully visible.',
-  'No camera motion, zoom, crop, pan, tilt, or drift.',
-  'Panels, borders, gutters, and text are locked.',
-  'Animate only within panels.'
+  'Animation Mode: CINEMATIC LIVE MOTION.',
+  'Camera: Fixed position (tripod), but layout contents must be DYNAMIC.',
+  'Output: A high-frame-rate video, not a static image.'
 ].join(' ');
+
 const STYLE_PRESERVATION_TEXT = [
-  'Preserve original line art, ink texture, and flat colors.',
-  'No stylization, gradients, smoothing, or extra effects.',
-  'No new elements.'
+  'Preserve the manga art style and character designs.',
+  'Allow lines to warp and shift to convey movement.',
+  'Prioritize fluid animation over pixel-perfect rigidity.'
 ].join(' ');
+
 const PANEL_LOCK_TEXT = [
-  'Panel borders are absolute.',
-  'No crossing or blending between panels.'
+  'Treat panel borders as windows looking into active scenes.',
+  'Inside every panel, there must be movement.'
 ].join(' ');
+
 const FORBIDDEN_CHANGES_TEXT = [
-  'Do not change layout, perspective, poses, or text.',
-  'No global motion or stabilization.',
-  'No reframing.'
+  'Do not change the text/speech bubbles.',
+  'Do not morph character identities.'
 ].join(' ');
+
 const VIDEO_SETTINGS_TEXT = [
   `Duration: ${VEO_DURATION_SECONDS} seconds.`,
-  'Motion should be strong, clearly visible, and continuous while poses stay fixed.',
-  'Use pronounced breathing, blinking, eye shifts, and hair/cloth motion.',
-  'Include looping motion in existing background details (still subtle in size, but visible).',
-  'No extra effects. No audio.'
+  'MOTION INSTRUCTION: Apply "Heavy Weather" physics. Make it look like a storm is passing through.',
+  '1. ATMOSPHERE: Clouds, dust, speed lines, and debris must fly across the screen continuously.',
+  '2. HAIR & CLOTHES: Must whip and flow violently (high amplitude) for every character.',
+  '3. BREATHING: Deep, exaggerated chest rising/falling for everyone.',
+  '4. FACE: Rapid blinking, eyes darting, mouths moving.',
+  '5. BACKGROUND: Trees sway, grass waves, lights pulse.',
+  'If something can move, IT MUST MOVE. Avoid stillness at all costs.',
+  'Make the scene chaotic, alive, and intense.'
 ].join(' ');
 
 const ANIMATION_PROMPT = `BASE CONSTRAINTS:\n${BASE_CONSTRAINTS_TEXT}\n\nSTYLE & ART PRESERVATION:\n${STYLE_PRESERVATION_TEXT}\n\nPANEL LOCK:\n${PANEL_LOCK_TEXT}\n\nFORBIDDEN CHANGES:\n${FORBIDDEN_CHANGES_TEXT}\n\nVIDEO SETTINGS:\n${VIDEO_SETTINGS_TEXT}`;
@@ -93,10 +99,33 @@ async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+async function sleepWithCancel(ms, shouldCancel) {
+  const step = 250;
+  let elapsed = 0;
+  while (elapsed < ms) {
+    if (shouldCancel && shouldCancel()) {
+      throw new Error('Request canceled by client');
+    }
+    const wait = Math.min(step, ms - elapsed);
+    await sleep(wait);
+    elapsed += wait;
+  }
+}
+
 function maskKey(key) {
   if (!key) return 'missing';
   if (key.length <= 10) return '***';
   return `${key.slice(0, 6)}...${key.slice(-4)}`;
+}
+
+function stableSeedFromString(input = '') {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const seed = (hash >>> 0) % 2147483647;
+  return seed === 0 ? 1 : seed;
 }
 
 const vertexAuth = new GoogleAuth({
@@ -221,10 +250,10 @@ function sanitizePrompt(text = '') {
     [/fluid/gi, 'liquid'],
     [/droplet(s)?/gi, 'small particles'],
     [/liquid/gi, 'color wash'],
-    [/ooz(?:e|ing)?/gi, 'slow shift'],
-    [/drip(?:ping|s)?/gi, 'slow shift'],
-    [/simmer(?:ing)?/gi, 'soft pulse'],
-    [/gasp(?:ing)?/gi, 'slow breathing'],
+    [/ooz(?:e|ing)?/gi, 'rapid shift'],
+    [/drip(?:ping|s)?/gi, 'rapid shift'],
+    [/simmer(?:ing)?/gi, 'strong pulse'],
+    [/gasp(?:ing)?/gi, 'heavy breathing'],
     [/collapsed|fallen|defeated|suppressed|crushing/gi, 'resting'],
     [/pile|heap/gi, 'group'],
     [/\bboot\b/gi, 'foot'],
@@ -241,9 +270,23 @@ function sanitizePrompt(text = '') {
     output = output.replace(pattern, replacement);
   }
 
-  output = output.replace(/background:\s*completely static[^\\n]*/gi, 'Panel/Props: subtle ambient motion of existing details');
+  output = output.replace(/background:\s*completely static[^\\n]*/gi, 'Panel/Props: strong continuous motion of existing details');
   output = output.replace(/\s{2,}/g, ' ').trim();
   return output;
+}
+
+function amplifyMotionText(text = '') {
+  return text
+    .replace(/\bsubtle(?:ly)?\b/gi, 'strong')
+    .replace(/\bgentle(?:ly)?\b/gi, 'strong')
+    .replace(/\bslight(?:ly)?\b/gi, 'strong')
+    .replace(/\bsoft(?:ly)?\b/gi, 'strong')
+    .replace(/\bfaint(?:ly)?\b/gi, 'strong')
+    .replace(/\bminor\b/gi, 'strong')
+    .replace(/\bsmall\b/gi, 'large')
+    .replace(/\bslow(?:ly)?\b/gi, 'fast')
+    .replace(/\boccasional(?:ly)?\b/gi, 'frequent')
+    .replace(/\bdrift(?:s|ing)?\b/gi, 'sweep');
 }
 
 function compactPrompt(text = '', maxLines = 4, maxChars = 280) {
@@ -302,27 +345,32 @@ function stripSensitiveLines(text = '') {
 
 function buildMinimalPrompt(userPrompt = '') {
   const base = [
-    'All visible figures: strong breathing, frequent blinking, eye shifts, and small head/hand motion; hair and cloth sway continuously.',
-    'Props/background: existing details shimmer or drift in looping motion (text/lines can pulse slightly).',
-    'Loop each motion 2-3 times across the clip. Frame locked. Preserve line art and colors. No new elements.'
+    'URGENT: MAXIMIZE MOVEMENT. Do not output a static image.',
+    'Every character in every panel must be moving continuously (breathing, blinking, swaying).',
+    'Add "wind" triggers: hair and clothes must flow constantly.',
+    'Backgrounds must drift, shimmer, or pulse.',
+    'Animate crowds with individual distinct timings.',
+    'Exaggerate all motions to ensure visibility on small screens.',
+    'Avoid pauses. Full 8-second loop of constant activity.'
   ];
   const cleaned = userPrompt ? sanitizePrompt(userPrompt) : '';
   const safeUser = cleaned ? stripSensitiveLines(cleaned) : '';
   if (safeUser) {
-    base.push(`USER: ${safeUser.slice(0, 100)}`);
+    base.push(`USER REQUEST: ${safeUser.slice(0, 100)}`);
   }
   return base.join('\n');
 }
 
 function buildUltraShortPrompt(userPrompt = '') {
   const base = [
-    'Animate all visible figures with strong breathing, frequent blinking, eye shifts, and hair/cloth motion.',
-    'Animate existing props/background with looping shimmer or drift only.',
-    'Keep framing and layout locked. No camera motion. No new elements.'
+    'Generate a video with intense motion. Make characters breathe deeply, blink often, and sway.',
+    'Hair and clothes must ripple like flags in wind.',
+    'Backgrounds must be active (clouds, dust, leaves).',
+    'No static frames. Everything alive, everything moving.'
   ];
   const cleaned = userPrompt ? sanitizePrompt(userPrompt).slice(0, 120) : '';
   if (cleaned) {
-    base.push(`USER DIRECTION: ${cleaned}`);
+    base.push(`CONTEXT: ${cleaned}`);
   }
   return base.join('\n');
 }
@@ -363,13 +411,15 @@ async function listGeminiModels() {
 }
 
 async function buildPromptFromImage({ imageData, mimeType, userPrompt }) {
+  console.log('🧠 Building prompt...');
   const cleanedUserPrompt = userPrompt && typeof userPrompt === 'string'
     ? sanitizePrompt(userPrompt).slice(0, 500)
     : '';
   if (VEO_MINIMAL_PROMPT) {
     if (VEO_USE_GEMINI3_PROMPT && imageData && mimeType) {
       try {
-        const analysisPrompt = 'List up to 3 visible subjects or details to animate. Use neutral words only.';
+        console.log('🧠 Gemini analysis (minimal) start');
+        const analysisPrompt = 'Write 4–6 complete sentences describing the full scene: background, environment, and all visible figures. Include 12–16 visible elements and specify the exact motion each should do (blink, mouth move, breathing, hair/cloth sway, rocks move fast along trails, dust/texture sweep, clouds). If a panel shows a group, explicitly state that every person in that group must animate with at least two distinct motions and unique timing. Use only neutral terms like figure/character/object; avoid age/gender or violent words. Avoid words like subtle/gentle/slight/slow and use strong motion verbs.';
         const analysisContents = [
           {
             role: 'user',
@@ -379,9 +429,11 @@ async function buildPromptFromImage({ imageData, mimeType, userPrompt }) {
             ]
           }
         ];
-        const analysisConfig = GEMINI3_THINKING_LEVEL
-          ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } }
-          : undefined;
+        const analysisConfig = {
+          ...(GEMINI3_THINKING_LEVEL ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } } : {}),
+          temperature: 0,
+          topP: 0.2
+        };
         const analysis = await generateGeminiContent({
           model: GEMINI3_ANALYSIS_MODEL,
           contents: analysisContents,
@@ -390,13 +442,17 @@ async function buildPromptFromImage({ imageData, mimeType, userPrompt }) {
         let cleanedAnalysis = sanitizePrompt(analysis.text || '');
         cleanedAnalysis = cleanedAnalysis.replace(/^based on[^:]*:\s*/i, '');
         cleanedAnalysis = cleanedAnalysis.replace(/^here are[^:]*:\s*/i, '');
-        cleanedAnalysis = compactPrompt(
-          stripSensitiveLines(cleanedAnalysis),
-          2,
-          240
-        );
+        cleanedAnalysis = stripSensitiveLines(cleanedAnalysis);
+        cleanedAnalysis = amplifyMotionText(cleanedAnalysis)
+          .replace(/\s+/g, ' ')
+          .trim();
+        // Keep full Gemini analysis for the prompt (no truncation).
+        if (cleanedAnalysis && !/[.!?]$/.test(cleanedAnalysis)) {
+          cleanedAnalysis = `${cleanedAnalysis}.`;
+        }
         if (cleanedAnalysis) {
-          return `${ANIMATION_PROMPT}\n\n${buildMinimalPrompt(cleanedUserPrompt)}\nFocus: ${cleanedAnalysis}`;
+          console.log(`🧠 Gemini analysis (minimal) result: ${cleanedAnalysis}`);
+          return `${ANIMATION_PROMPT}\n\n${buildMinimalPrompt(cleanedUserPrompt)}\nFocus: ${cleanedAnalysis} Animate these items with strong, continuous motion.`;
         }
       } catch (error) {
         console.warn('⚠️ Gemini analysis (minimal) failed, using minimal prompt only.');
@@ -425,7 +481,7 @@ async function buildPromptFromImage({ imageData, mimeType, userPrompt }) {
   }
 
   const analysisPrompt = [
-    'List visible characters and one or two clearly visible motions each, plus one background/prop motion. Be very brief.',
+    'List visible characters and one or two clearly visible motions each, plus one background/prop motion. Use strong motion verbs; avoid words like subtle/gentle/slight/slow. Be very brief.',
     ...(cleanedUserPrompt ? [`USER DIRECTION: ${cleanedUserPrompt}`] : [])
   ].join('\n');
 
@@ -444,17 +500,21 @@ async function buildPromptFromImage({ imageData, mimeType, userPrompt }) {
     }
   ];
 
-  const analysisConfig = GEMINI3_THINKING_LEVEL
-    ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } }
-    : undefined;
+  const analysisConfig = {
+    ...(GEMINI3_THINKING_LEVEL ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } } : {}),
+    temperature: 0,
+    topP: 0.2
+  };
 
   let analysis;
   try {
+    console.log('🧠 Gemini analysis start');
     analysis = await generateGeminiContent({
       model: GEMINI3_ANALYSIS_MODEL,
       contents: analysisContents,
       generationConfig: analysisConfig
     });
+    console.log('🧠 Gemini analysis result:', amplifyMotionText(sanitizePrompt(analysis.text || '')).slice(0, 240));
   } catch (error) {
     console.warn('⚠️ Gemini analysis failed, using ultra-short prompt fallback.');
     return `${ANIMATION_PROMPT}\n\n${buildUltraShortPrompt(cleanedUserPrompt)}`;
@@ -466,7 +526,7 @@ async function buildPromptFromImage({ imageData, mimeType, userPrompt }) {
     'Preserve art exactly. No camera motion. No new elements.',
     ...(cleanedUserPrompt ? [`USER DIRECTION: ${cleanedUserPrompt}`] : []),
     'Reference analysis:',
-    sanitizePrompt(analysis.text || '')
+    amplifyMotionText(sanitizePrompt(analysis.text || ''))
   ].join('\n');
 
   const promptContents = [
@@ -476,17 +536,21 @@ async function buildPromptFromImage({ imageData, mimeType, userPrompt }) {
     }
   ];
 
-  const promptConfig = GEMINI3_THINKING_LEVEL
-    ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } }
-    : undefined;
+  const promptConfig = {
+    ...(GEMINI3_THINKING_LEVEL ? { thinkingConfig: { thinkingLevel: GEMINI3_THINKING_LEVEL } } : {}),
+    temperature: 0,
+    topP: 0.2
+  };
 
   let promptResult;
   try {
+    console.log('🧠 Gemini prompt build start');
     promptResult = await generateGeminiContent({
       model: GEMINI3_PROMPT_MODEL,
       contents: promptContents,
       generationConfig: promptConfig
     });
+    console.log('🧠 Gemini prompt build done');
   } catch (error) {
     console.warn('⚠️ Gemini prompt build failed, using ultra-short prompt fallback.');
     return `${ANIMATION_PROMPT}\n\n${buildUltraShortPrompt(cleanedUserPrompt)}`;
@@ -495,7 +559,8 @@ async function buildPromptFromImage({ imageData, mimeType, userPrompt }) {
   const rawPrompt = promptResult.text || '';
   const sanitized = sanitizePrompt(rawPrompt);
   const stripped = stripSensitiveLines(sanitized);
-  const shortened = compactPrompt(stripped || sanitized, 4, 280);
+  const boosted = amplifyMotionText(stripped || sanitized);
+  const shortened = compactPrompt(boosted, 4, 280);
   const finalLines = shortened || buildUltraShortPrompt(cleanedUserPrompt);
   return `${ANIMATION_PROMPT}\n\n${finalLines}`;
 }
@@ -567,13 +632,17 @@ async function pollOperation(operationName) {
   throw new Error('Video generation timed out');
 }
 
-async function pollVertexOperation(operationName) {
+async function pollVertexOperation(operationName, shouldCancel) {
   const url = getVertexEndpoint('fetchPredictOperation');
   if (!url) throw new Error('Vertex AI is not configured');
   const maxPolls = 180;
   const pollInterval = 5000;
+  console.log(`⏳ Vertex polling started: ${operationName}`);
 
   for (let i = 0; i < maxPolls; i += 1) {
+    if (shouldCancel && shouldCancel()) {
+      throw new Error('Request canceled by client');
+    }
     const token = await getAccessToken();
     const response = await fetch(url, {
       method: 'POST',
@@ -596,7 +665,7 @@ async function pollVertexOperation(operationName) {
     }
 
     console.log(`⏳ Vertex polling... ${i + 1}/${maxPolls}`);
-    await sleep(pollInterval);
+    await sleepWithCancel(pollInterval, shouldCancel);
   }
 
   throw new Error('Vertex video generation timed out');
@@ -617,16 +686,20 @@ async function acquireVeoSlot() {
   await waitForVeoCooldown();
   if (veoInFlight < VEO_MAX_CONCURRENT) {
     veoInFlight += 1;
+    console.log(`🟢 Veo slot acquired (inFlight=${veoInFlight})`);
     return;
   }
+  console.log(`⏳ Waiting for Veo slot (inFlight=${veoInFlight}, queue=${veoQueue.length})`);
   await new Promise(resolve => veoQueue.push(resolve));
   await waitForVeoCooldown();
   veoInFlight += 1;
+  console.log(`🟢 Veo slot acquired after wait (inFlight=${veoInFlight})`);
 }
 
 function releaseVeoSlot() {
   if (VEO_MAX_CONCURRENT < 1) return;
   veoInFlight = Math.max(0, veoInFlight - 1);
+  console.log(`🟣 Veo slot released (inFlight=${veoInFlight})`);
   if (veoQueue.length > 0 && veoInFlight < VEO_MAX_CONCURRENT) {
     const next = veoQueue.shift();
     next();
@@ -634,9 +707,22 @@ function releaseVeoSlot() {
 }
 
 app.post('/api/veo', async (req, res) => {
-  console.log('\n🎬 === VEO VIDEO GENERATION REQUEST ===');
-
-  const { imageBase64, mimeType, aspectRatio, model, resolution, userPrompt } = req.body;
+  const { imageBase64, mimeType, aspectRatio, model, resolution, userPrompt, pageIndex, pageNumber, source } = req.body;
+  const pageLabel = Number.isFinite(pageNumber)
+    ? `Page ${pageNumber}`
+    : Number.isFinite(pageIndex)
+      ? `Page ${pageIndex + 1}`
+      : 'Page ?';
+  const sourceLabel = source ? ` · ${source}` : '';
+  console.log(`\n🎬 === VEO VIDEO GENERATION REQUEST (${pageLabel}${sourceLabel}) ===`);
+  let requestCanceled = false;
+  const markCanceled = () => {
+    requestCanceled = true;
+  };
+  req.on('aborted', () => {
+    markCanceled();
+    console.warn(`⚠️ Request aborted by client (${pageLabel}${sourceLabel})`);
+  });
 
   if (VEO_REQUIRE_IMAGE && !VEO_INCLUDE_IMAGE) {
     return res.status(400).json({ error: 'VEO_INCLUDE_IMAGE must be true when VEO_REQUIRE_IMAGE is enabled.' });
@@ -651,7 +737,13 @@ app.post('/api/veo', async (req, res) => {
   }
 
   const queuedAt = Date.now();
+  console.log('🧠 Waiting for prompt build + model call...');
   await acquireVeoSlot();
+  if (requestCanceled) {
+    console.warn(`⚠️ Request canceled before prompt build (${pageLabel}${sourceLabel})`);
+    releaseVeoSlot();
+    return;
+  }
   const waitedMs = Date.now() - queuedAt;
   if (waitedMs > 0) {
     console.log(`⏳ Request queued ${waitedMs}ms`);
@@ -670,8 +762,22 @@ app.post('/api/veo', async (req, res) => {
       mimeType: effectiveMimeType,
       userPrompt
     });
+    const promptSeedPart = userPrompt && typeof userPrompt === 'string'
+      ? sanitizePrompt(userPrompt).trim()
+      : '';
+    const imageSeedPart = imageData
+      ? `${imageData.length}:${imageData.slice(0, 2048)}:${imageData.slice(-2048)}`
+      : '';
+    const seedInput = [promptSeedPart, imageSeedPart, pageIndex ?? '', pageNumber ?? ''].join('|');
+    const seed = stableSeedFromString(seedInput);
+    console.log('🧠 Prompt build complete.');
+    const promptPreview = animationPrompt.length > 420
+      ? `${animationPrompt.slice(0, 420)}…`
+      : animationPrompt;
+    console.log('🧠 Prompt preview:', promptPreview);
+    console.log(`🎲 Seed: ${seed}`);
     if (VEO_DEBUG_PROMPT) {
-      console.log('🧠 Gemini3 prompt:\n', animationPrompt);
+      console.log('🧠 Full prompt:\n', animationPrompt);
     }
 
     if (VEO_PROVIDER === 'vertex') {
@@ -734,7 +840,10 @@ app.post('/api/veo', async (req, res) => {
         sampleCount: 1,
         durationSeconds: VEO_DURATION_SECONDS,
         ...(aspectRatio ? { aspectRatio: aspectRatio === '9:16' ? '9:16' : '16:9' } : {}),
-        ...(resolution ? { resolution } : {})
+        ...(resolution ? { resolution } : {}),
+        seed,
+        // CRITICAL: Negative prompt to prevent static images
+        negativePrompt: 'static, frozen, still image, photograph, jpeg, motionless, pause, freeze, slide show, text only, blurred, warped, low quality'
       };
 
       const imageRef = instance.image ? { ...instance.image } : null;
@@ -776,7 +885,7 @@ app.post('/api/veo', async (req, res) => {
 
         if (vertexResult.name) {
           console.log(`⏳ Vertex operation started: ${vertexResult.name}`);
-          const result = await pollVertexOperation(vertexResult.name);
+          const result = await pollVertexOperation(vertexResult.name, () => requestCanceled);
           const videoUrl = extractVideoUrl(result);
           return { videoUrl, result };
         }
@@ -821,6 +930,7 @@ app.post('/api/veo', async (req, res) => {
       resolution,
       personGeneration: VEO_PERSON_GENERATION,
       numberOfVideos: VEO_NUMBER_OF_VIDEOS,
+      seed,
       includeImage: VEO_INCLUDE_IMAGE,
       imageMode
     });
@@ -962,6 +1072,10 @@ app.post('/api/veo', async (req, res) => {
 
     throw new Error(`Unexpected response format: ${JSON.stringify(generateResult).substring(0, 300)}`);
   } catch (error) {
+    if (requestCanceled || /canceled by client/i.test(error?.message || '')) {
+      console.warn('⚠️ Request canceled by client, stopping polling.');
+      return;
+    }
     const message = error?.message || String(error);
     if (message.includes('429')) {
       return res.status(429).json({
@@ -1034,6 +1148,10 @@ app.get('/api/veo/download', async (req, res) => {
       return;
     } catch (error) {
       const message = error?.message || String(error);
+      if (res.headersSent || res.writableEnded) {
+        console.warn(`⚠️ Download stream error after headers sent: ${message}`);
+        return;
+      }
       return res.status(500).json({ error: message });
     }
   }
@@ -1077,6 +1195,10 @@ app.get('/api/veo/download', async (req, res) => {
     await pipeline(bodyStream, res);
   } catch (error) {
     const message = error?.message || String(error);
+    if (res.headersSent || res.writableEnded) {
+      console.warn(`⚠️ Download stream error after headers sent: ${message}`);
+      return;
+    }
     return res.status(500).json({ error: message });
   }
 });

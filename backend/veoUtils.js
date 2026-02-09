@@ -6,6 +6,7 @@ export function buildVeoRequestBody({
   resolution,
   personGeneration,
   numberOfVideos,
+  seed,
   includeImage = true,
   imageMode = 'first_frame'
 }) {
@@ -16,7 +17,8 @@ export function buildVeoRequestBody({
     ...(Number.isInteger(numberOfVideos) && numberOfVideos > 0
       ? { numberOfVideos }
       : {}),
-    ...(personGeneration ? { personGeneration } : {})
+    ...(personGeneration ? { personGeneration } : {}),
+    ...(Number.isInteger(seed) ? { seed } : {})
   };
 
   if (includeImage && imageData && mimeType) {
