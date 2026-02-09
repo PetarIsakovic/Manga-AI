@@ -53,37 +53,43 @@ const VERTEX_OUTPUT_GCS_URI = process.env.VERTEX_OUTPUT_GCS_URI;
 const PORT = process.env.PORT || 3001;
 
 const BASE_CONSTRAINTS_TEXT = [
-  'Animation Mode: CINEMATIC LIVE MOTION.',
-  'Camera: Fixed position (tripod), but layout contents must be DYNAMIC.',
-  'Output: A high-frame-rate video, not a static image.'
+  'Animation Mode: HIGH IMPACT CINEMATIC.',
+  'Input Image Policy: The video must start with the exact provided image (Frame 0).',
+  'Output: A high-frame-rate, fluid video that evolves immediately from the start frame.',
+  'Do not treat the image as just a style reference; it is the starting point of the animation.'
 ].join(' ');
 
 const STYLE_PRESERVATION_TEXT = [
-  'Preserve the manga art style and character designs.',
-  'Allow lines to warp and shift to convey movement.',
-  'Prioritize fluid animation over pixel-perfect rigidity.'
+  'CRITICAL: ARTWORK CONSISTENCY.',
+  'You represent an animator manipulating the original ink lines, NOT a new artist redrawing the scene.',
+  'Preserve the exact character designs, facial features, and hatching style of Frame 0.',
+  'Do not introduce new rendering styles, shading, or 3D effects.',
+  'Maintain the original "hand-drawn" look throughout the video.',
+  'Ensure character identity remains identical to the input image.'
 ].join(' ');
 
 const PANEL_LOCK_TEXT = [
   'Treat panel borders as windows looking into active scenes.',
-  'Inside every panel, there must be movement.'
+  'Inside every panel, there must be intense, continuous movement.'
 ].join(' ');
 
 const FORBIDDEN_CHANGES_TEXT = [
-  'Do not change the text/speech bubbles.',
-  'Do not morph character identities.'
+  'ABSULUTELY FORBIDDEN: Changing character faces, hairstyles, or outfits.',
+  'No changing of panel layouts or border thickness.',
+  'No "morphing" into different people.',
+  'No shifting the camera angle or perspective (preserve the original composition).'
 ].join(' ');
 
 const VIDEO_SETTINGS_TEXT = [
   `Duration: ${VEO_DURATION_SECONDS} seconds.`,
-  'MOTION INSTRUCTION: Apply "Heavy Weather" physics. Make it look like a storm is passing through.',
-  '1. ATMOSPHERE: Clouds, dust, speed lines, and debris must fly across the screen continuously.',
-  '2. HAIR & CLOTHES: Must whip and flow violently (high amplitude) for every character.',
-  '3. BREATHING: Deep, exaggerated chest rising/falling for everyone.',
-  '4. FACE: Rapid blinking, eyes darting, mouths moving.',
-  '5. BACKGROUND: Trees sway, grass waves, lights pulse.',
-  'If something can move, IT MUST MOVE. Avoid stillness at all costs.',
-  'Make the scene chaotic, alive, and intense.'
+  'MOTION STRATEGY: "WARP & FLOW" (High Energy).',
+  '1. START: Frame 0 is the fixed anchor.',
+  '2. HAIR/CLOTHES: Animate with high-frequency wavering/rippling (like strong wind). Keep the general silhouette but displace the texture.',
+  '3. CHARACTERS: Use "breathing" expansion/contraction and rhythmic swaying. Do not rotate heads significantly if it distort features.',
+  '4. BACKGROUND: Texture drift (speed lines, dust, clouds, debris) must be constant and fast.',
+  '5. CROWDS: Small independent motions for background figures.',
+  'High motion is required, but it must look like the Original Drawing coming to life, not a remake.',
+  'Avoid "melting" lines. Keep structures solid while moving them.'
 ].join(' ');
 
 const ANIMATION_PROMPT = `BASE CONSTRAINTS:\n${BASE_CONSTRAINTS_TEXT}\n\nSTYLE & ART PRESERVATION:\n${STYLE_PRESERVATION_TEXT}\n\nPANEL LOCK:\n${PANEL_LOCK_TEXT}\n\nFORBIDDEN CHANGES:\n${FORBIDDEN_CHANGES_TEXT}\n\nVIDEO SETTINGS:\n${VIDEO_SETTINGS_TEXT}`;
@@ -345,13 +351,14 @@ function stripSensitiveLines(text = '') {
 
 function buildMinimalPrompt(userPrompt = '') {
   const base = [
-    'URGENT: MAXIMIZE MOVEMENT. Do not output a static image.',
-    'Every character in every panel must be moving continuously (breathing, blinking, swaying).',
-    'Add "wind" triggers: hair and clothes must flow constantly.',
-    'Backgrounds must drift, shimmer, or pulse.',
+    'URGENT: START WITH PROVIDED IMAGE AS FRAME 0. MAXIMIZE MOVEMENT.',
+    'Video must evolve from the input image. Do not output a static image.',
+    'Every character in every panel must be moving continuously (chest heaving, rapid blinking, swaying).',
+    'Add strong "wind" triggers: hair and clothes must flow violently.',
+    'Backgrounds must drift, shimmer, or pulse rapidly.',
     'Animate crowds with individual distinct timings.',
-    'Exaggerate all motions to ensure visibility on small screens.',
-    'Avoid pauses. Full 8-second loop of constant activity.'
+    'Exaggerate all motions significantly.',
+    'Avoid pauses. Full loop of constant, intense activity.'
   ];
   const cleaned = userPrompt ? sanitizePrompt(userPrompt) : '';
   const safeUser = cleaned ? stripSensitiveLines(cleaned) : '';
@@ -363,9 +370,10 @@ function buildMinimalPrompt(userPrompt = '') {
 
 function buildUltraShortPrompt(userPrompt = '') {
   const base = [
-    'Generate a video with intense motion. Make characters breathe deeply, blink often, and sway.',
-    'Hair and clothes must ripple like flags in wind.',
-    'Backgrounds must be active (clouds, dust, leaves).',
+    'Start with provided image. Transform into video with intense motion.',
+    'Characters breathe deeply, blink often, and sway heavily.',
+    'Hair and clothes must ripple like flags in strong wind.',
+    'Backgrounds active (clouds, dust, leaves moving fast).',
     'No static frames. Everything alive, everything moving.'
   ];
   const cleaned = userPrompt ? sanitizePrompt(userPrompt).slice(0, 120) : '';
